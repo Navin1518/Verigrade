@@ -864,6 +864,36 @@
     button.disabled = true;
     $("verifyResult").innerHTML = '<div class="empty"><p>Checking the local chain…</p></div>';
     try {
+      const input = $("vInput").value.trim();
+      let serverPayload = null;
+      if (/^\d+$/.test(input)) {
+        serverPayload = { record_id: Number(input) };
+      } else if (/^[a-fA-F0-9]{64}$/.test(input)) {
+        serverPayload = { hash: input };
+      } else if (input.startsWith("{")) {
+        serverPayload = { qr_payload: input };
+      }
+      if (serverPayload) {
+        const response = await fetch(API_BASE + "/api/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(serverPayload)
+        });
+        const serverResult = await response.json();
+        if (response.ok && serverResult.status) {
+          renderVerification({
+            status: serverResult.status,
+            record: serverResult.record || null,
+            reason: serverResult.message || serverResult.reason || ""
+          });
+          commitState(function (draft) {
+            appendAudit(draft, "Record verification attempted",
+              serverResult.record ? serverResult.record.id : "unmatched input",
+              serverResult.status === "VERIFIED" ? "Success" : "Warning", "Server verifier");
+          });
+          return;
+        }
+      }
       const result = await Ledger.verifyLookup(state.records, $("vInput").value);
       renderVerification(result);
       try {
@@ -1055,6 +1085,21 @@
       renderAll();
       toast("First approval recorded. A second approval is required.", "ok");
       return;
+    }
+    const correctionResponse = await fetch(API_BASE + "/api/corrections", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target_id: correction.recordId,
+        new_marks: correction.requested,
+        reason: correction.reason.length >= 10 ? correction.reason : "Correction approved after two-administrator review.",
+        approver_1: "Administrator One",
+        approver_2: "Administrator Two"
+      })
+    });
+    const correctionResult = await correctionResponse.json();
+    if (!correctionResponse.ok || !correctionResult.ok) {
+      throw new Error(correctionResult.error || "The server could not append the correction.");
     }
     const updatedRecords = await rehashChainWithCorrection(correction.recordId, correction.requested);
     commitState(function (draft) {

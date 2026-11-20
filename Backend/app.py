@@ -559,7 +559,6 @@ def create_correction():
 # --------------------------------------------------------------------------
 # Entrypoint
 # --------------------------------------------------------------------------
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     print(f"VeriGrade API -> http://0.0.0.0:{port}   (database: {db.DB_PATH})")

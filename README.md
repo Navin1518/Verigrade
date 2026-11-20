@@ -44,6 +44,13 @@ VERIGRADE/
 
 Demo verification: Student ID `STU-1001` with reference `VG-2001` shows *Verified*; `STU-1003` / `VG-2003` shows *Tampered*; `STU-1004` / `VG-2004` shows *Invalid record*; anything else shows *Record not found*.
 
+## Deployment
+The site is published with GitHub Pages from the `main` branch using GitHub Actions. Each push to `main` redeploys the static files; the workflow can also be started manually from the repository's **Actions** tab.
+
+Live site: https://navin1518.github.io/Verigrade/
+
+If GitHub Pages has not been enabled for the repository yet, open **Settings → Pages** and set the build and deployment source to **GitHub Actions**.
+
 ## Screenshots
 _Add screenshots here._
 

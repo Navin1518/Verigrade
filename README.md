@@ -77,6 +77,13 @@ python Backend/app.py
 
 The app is available at `http://127.0.0.1:5000`.
 
+### Deploy the backend with Railway
+1. Open Railway and choose **Deploy from GitHub repo**.
+2. Select `Navin1518/Verigrade`.
+3. Railway will use `railway.json` and start the Flask app with Gunicorn.
+4. Open **Settings -> Networking -> Generate Domain**.
+5. The generated URL is the public backend URL.
+
 ## Screenshots
 _Add screenshots here._
 

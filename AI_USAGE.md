@@ -1,11 +1,11 @@
 # AI Usage
 
 ## Tools used
-- **GitHub Copilot (AI assistant in VS Code):** assisted with the browser-local SHA-256 ledger module, record validation and chaining, localStorage schema checks, QR payload/display flow, verification UI, the welcome/Get started page, serif display typography and reduced-motion-aware transitions, accessibility/responsive refinements, the default graphite-and-neon-lime theme, and focused automated tests.
+- **GitHub Copilot (AI assistant in VS Code):** assisted with the browser-local SHA-256 ledger module, record validation and chaining, localStorage schema checks, QR payload/display flow, verification UI, the welcome/Get started page, Playfair Display app-wide typography and reduced-motion-aware page/card/form/table motion, accessibility/responsive refinements, the default graphite-and-neon-lime theme, and focused automated tests.
 
 ## Human review and testing
 - Automated tests cover valid chains, changed fields, incomplete records, duplicate IDs and results, QR/ID/hash lookup, and malformed payloads.
-- Browser checks exercised the welcome/Get started flow, publishing, duplicate rejection, verification, QR generation, persistence across reloads, tamper detection, correction re-hashing, settings persistence, damaged-storage handling, app-view typography/entrance transitions, reduced-motion behavior, and responsive layouts from 320px to desktop without page overflow.
+- Browser checks exercised the welcome/Get started flow, publishing, duplicate rejection, verification, QR generation, persistence across reloads, tamper detection, correction re-hashing, settings persistence, damaged-storage handling, app-view typography/entrance transitions, reduced-motion behavior, and responsive layouts from 320px to desktop without page overflow. The latest visual pass was reviewed for the Playfair Display headings and app-wide motion; it does not change ledger or verification behavior.
 - No independent human code review is claimed; the project owner should review the UI and security limitations before presenting or extending it.
 - No real student records, credentials, or confidential data were used as test fixtures.
 

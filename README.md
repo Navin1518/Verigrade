@@ -67,6 +67,16 @@ Live site: https://navin1518.github.io/Verigrade/
 
 If GitHub Pages has not been enabled for the repository yet, open **Settings → Pages** and set the build and deployment source to **GitHub Actions**.
 
+### Run the Flask backend locally
+```powershell
+py -m venv .venv
+.\\.venv\\Scripts\\Activate.ps1
+pip install -r Backend/requirements.txt
+python Backend/app.py
+```
+
+The app is available at `http://127.0.0.1:5000`.
+
 ## Screenshots
 _Add screenshots here._
 

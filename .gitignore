@@ -1,6 +1,12 @@
 # Secrets
 .env
 .env.*
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+Backend/results.db
 # Dependencies
 node_modules/
 # OS files

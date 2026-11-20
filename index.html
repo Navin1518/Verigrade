@@ -3,18 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VERIGRADE – Tamper-Proof Exam Result Ledger</title>
+  <title>VERIGRADE – Local Tamper-Evident Exam Result Ledger</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
-  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.js" integrity="sha384-LtmWBcrD5iuFIR4sFphS8IiiaftkypL5dJzLKywbyd9ATLB7ZbPz3JYnI9nvXHkV" crossorigin="anonymous"></script>
 </head>
 <body>
   <!-- ===== SIDEBAR ===== -->
   <aside class="sidebar" id="sidebar">
     <div class="brand">
       <i data-lucide="shield-check"></i>
-      <div><strong>VERIGRADE</strong><small>Northbridge University</small></div>
+      <div><strong>VERIGRADE</strong><small id="brandInstitution">Northbridge University</small></div>
     </div>
     <nav id="nav" aria-label="Main navigation">
       <button class="nav-item active" data-view="overview"><i data-lucide="layout-dashboard"></i>Overview</button>
@@ -28,7 +28,7 @@
     </nav>
     <div class="admin-card">
       <div class="avatar">AR</div>
-      <div><strong>Dr. Anita Rao</strong><small>Administrator</small></div>
+      <div><strong id="brandAdmin">Dr. Anita Rao</strong><small id="brandRole">Administrator</small></div>
     </div>
   </aside>
   <div class="backdrop" id="backdrop"></div>
@@ -45,9 +45,13 @@
     </header>
 
     <main class="content">
+      <div class="storage-notice" id="storageNotice" role="alert" hidden>
+        <p id="storageMessage"></p>
+        <button class="btn danger" id="resetStorageBtn" type="button" hidden>Reset damaged local data</button>
+      </div>
       <!-- OVERVIEW -->
       <section class="view active" id="overview">
-        <div class="page-head"><div><h1>Overview</h1><p>Trust Every Result. Verify Every Record.</p></div>
+        <div class="page-head"><div><h1>Overview</h1><p>Browser-local result ledger with SHA-256 integrity checks.</p></div>
           <div class="actions">
             <button class="btn primary" data-go="publish"><i data-lucide="file-plus-2"></i>Publish result</button>
             <button class="btn" data-go="verify"><i data-lucide="scan-line"></i>Verify result</button>
@@ -78,7 +82,7 @@
             <select id="studentDept" aria-label="Filter by department"><option value="">All departments</option></select>
           </div>
           <div class="table-wrap"><table><thead><tr><th>Student ID</th><th>Name</th><th>Program</th><th>Department</th><th>Email</th><th></th></tr></thead><tbody id="studentBody"></tbody></table></div>
-          <div class="empty" id="studentEmpty" hidden><i data-lucide="user-x"></i><p>No students match your search. Try a different name or department.</p></div>
+          <div class="empty" id="studentEmpty" hidden><i data-lucide="user-x"></i><p>No students yet or no students match. Clear the filters or add a student.</p></div>
         </div>
       </section>
 
@@ -88,7 +92,12 @@
         <div class="card">
           <div class="toolbar">
             <input type="search" id="ledgerSearch" placeholder="Search by student, ID, exam or subject" aria-label="Search results">
-            <select id="ledgerStatus" aria-label="Filter by status"><option value="">All statuses</option><option>Verified</option><option>Pending</option><option>Tampered</option></select>
+            <select id="ledgerStatus" aria-label="Filter by integrity status">
+              <option value="">All statuses</option>
+              <option value="VERIFIED">VERIFIED</option>
+              <option value="TAMPERED / MODIFIED">TAMPERED / MODIFIED</option>
+              <option value="CORRUPTED / INCOMPLETE">CORRUPTED / INCOMPLETE</option>
+            </select>
           </div>
           <div class="table-wrap"><table><thead><tr><th>Student ID</th><th>Name</th><th>Exam</th><th>Subject</th><th>Marks</th><th>Max</th><th>Published</th><th>Status</th><th></th></tr></thead><tbody id="ledgerBody"></tbody></table></div>
           <div class="empty" id="ledgerEmpty" hidden><i data-lucide="search-x"></i><p>No results found. Clear the filters to see all records.</p></div>
@@ -98,34 +107,32 @@
 
       <!-- PUBLISH RESULT -->
       <section class="view" id="publish">
-        <div class="page-head"><div><h1>Publish Result</h1><p>Add a result to the demo ledger. Nothing is sent to a server.</p></div></div>
+        <div class="page-head"><div><h1>Publish Result</h1><p>Add a record to this browser's cryptographically linked ledger.</p></div></div>
         <form class="card form-grid" id="publishForm" novalidate>
-          <div class="field"><label for="fId">Student ID</label><input id="fId" placeholder="e.g. STU-1001"><span class="err"></span></div>
-          <div class="field"><label for="fName">Student name</label><input id="fName"><span class="err"></span></div>
-          <div class="field"><label for="fExam">Examination name</label><input id="fExam" placeholder="e.g. Semester 5 Final"><span class="err"></span></div>
-          <div class="field"><label for="fCourse">Course</label><input id="fCourse" placeholder="e.g. B.Tech CSE"><span class="err"></span></div>
-          <div class="field"><label for="fSubject">Subject</label><input id="fSubject"><span class="err"></span></div>
-          <div class="field"><label for="fSession">Academic session</label><input id="fSession" placeholder="e.g. 2026-27"><span class="err"></span></div>
-          <div class="field"><label for="fMarks">Marks obtained</label><input id="fMarks" type="number" min="0"><span class="err"></span></div>
-          <div class="field"><label for="fMax">Maximum marks</label><input id="fMax" type="number" min="1"><span class="err"></span></div>
-          <div class="field"><label for="fDate">Publication date</label><input id="fDate" type="date"><span class="err"></span></div>
+          <div class="field"><label for="fId">Student ID / roll no.</label><input id="fId" maxlength="100" required placeholder="e.g. CS-2026-1042"><span class="err"></span></div>
+          <div class="field"><label for="fName">Student name</label><input id="fName" maxlength="160" required><span class="err"></span></div>
+          <div class="field"><label for="fExam">Examination name</label><input id="fExam" maxlength="160" required placeholder="e.g. Semester 5 Final"><span class="err"></span></div>
+          <div class="field"><label for="fCourse">Course (optional)</label><input id="fCourse" maxlength="160" placeholder="e.g. B.Tech CSE"><span class="err"></span></div>
+          <div class="field"><label for="fSubject">Subject</label><input id="fSubject" maxlength="160" required><span class="err"></span></div>
+          <div class="field"><label for="fSession">Academic session (optional)</label><input id="fSession" maxlength="80" placeholder="e.g. 2026-27"><span class="err"></span></div>
+          <div class="field"><label for="fMarks">Marks obtained</label><input id="fMarks" type="number" min="0" step="any" required><span class="err"></span></div>
+          <div class="field"><label for="fMax">Maximum marks</label><input id="fMax" type="number" min="0.01" step="any" required><span class="err"></span></div>
+          <div class="field"><label for="fDate">Publication date (optional)</label><input id="fDate" type="date"><span class="err"></span></div>
+          <div class="field form-wide"><label for="fMetadata">Additional metadata (optional)</label><textarea id="fMetadata" rows="3" maxlength="2000" placeholder="Any context that should be protected by the record hash"></textarea><span class="err"></span></div>
           <div class="form-actions"><button type="submit" class="btn primary" id="publishBtn">Publish result</button><button type="button" class="btn" id="clearBtn">Clear form</button></div>
         </form>
       </section>
 
       <!-- VERIFY RESULT -->
       <section class="view" id="verify">
-        <div class="page-head"><div><h1>Verify Result</h1><p>Public verification screen (simulated demo).</p></div></div>
+        <div class="page-head"><div><h1>Verify Result</h1><p>Check a record against this browser's saved ledger.</p></div></div>
         <div class="grid-2">
           <div class="card verify-card">
-            <div class="qr" aria-hidden="true"><i data-lucide="qr-code"></i><span class="scan-line"></span></div>
-            <p class="muted center">Scan a marksheet QR code, or enter the details below.</p>
-            <div class="field"><label for="vId">Student ID</label><input id="vId" placeholder="STU-1001"></div>
-            <div class="field"><label for="vRef">Verification reference</label><input id="vRef" placeholder="VG-2001"></div>
-            <button class="btn primary wide" id="verifyBtn"><i data-lucide="shield-check"></i>Verify result</button>
-            <p class="notice">Simulated demo only. No cryptographic verification is performed.</p>
+            <div class="field"><label for="vInput">Record ID, SHA-256 hash, or QR payload</label><textarea id="vInput" rows="4" maxlength="5000" placeholder="Paste an ID, hash, or JSON scanned from a VeriGrade QR"></textarea></div>
+            <button class="btn primary wide" id="verifyBtn"><i data-lucide="shield-check"></i>Verify record</button>
+            <p class="notice">A QR from another device can only be verified if its ledger is also saved in this browser.</p>
           </div>
-          <div class="card" id="verifyResult"><div class="empty"><i data-lucide="shield-question"></i><p>Enter a student ID and reference to see a result here.</p></div></div>
+          <div class="card" id="verifyResult" aria-live="polite"><div class="empty"><i data-lucide="shield-question"></i><p>Enter an ID, hash, or QR payload to check the local chain.</p></div></div>
         </div>
       </section>
 
@@ -150,22 +157,22 @@
 
       <!-- SETTINGS -->
       <section class="view" id="settings">
-        <div class="page-head"><div><h1>Settings</h1><p>Interface controls for the prototype.</p></div><button class="btn primary" id="saveSettings">Save changes</button></div>
+        <div class="page-head"><div><h1>Settings</h1><p>Manage this browser's saved profile and display preferences.</p></div><button class="btn primary" id="saveSettings">Save changes</button></div>
         <div class="grid-2">
           <div class="card form-stack"><h2>Institution information</h2>
             <div class="field"><label for="sInst">Institution name</label><input id="sInst" value="Northbridge University"></div>
-            <div class="field"><label for="sEmail">Contact email</label><input id="sEmail" value="registrar@northbridge.edu"></div></div>
+            <div class="field"><label for="sEmail">Contact email</label><input id="sEmail" type="email" value="registrar@northbridge.edu"></div></div>
           <div class="card form-stack"><h2>Administrator profile</h2>
             <div class="field"><label for="sAdmin">Full name</label><input id="sAdmin" value="Dr. Anita Rao"></div>
             <div class="field"><label for="sRole">Role</label><input id="sRole" value="Administrator"></div></div>
           <div class="card"><h2>Notification preferences</h2>
-            <label class="switch"><input type="checkbox" checked> Email me about integrity alerts</label>
-            <label class="switch"><input type="checkbox" checked> Notify me of new correction requests</label>
-            <label class="switch"><input type="checkbox"> Weekly activity summary</label></div>
+            <label class="switch"><input type="checkbox" id="notifyIntegrity"> Show integrity alerts</label>
+            <label class="switch"><input type="checkbox" id="notifyCorrections"> Show correction requests</label>
+            <label class="switch"><input type="checkbox" id="weeklySummary"> Weekly activity summary</label></div>
           <div class="card"><h2>Appearance</h2>
             <div class="field"><label for="sAccent">Accent colour</label><select id="sAccent"><option value="#168BFF">Neon blue</option><option value="#35D8FF">Cyan</option><option value="#31D69A">Green</option></select></div>
             <h2 class="sub">Application information</h2>
-            <p class="muted">VERIGRADE v0.1 demo · Frontend prototype · Synthetic data only</p></div>
+            <p class="muted">VERIGRADE · SHA-256 browser-local ledger · No backend or signing key</p></div>
         </div>
       </section>
     </main>
@@ -181,6 +188,8 @@
   </div>
   <div class="toasts" id="toasts" aria-live="polite"></div>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU" crossorigin="anonymous" defer></script>
+  <script src="ledger.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

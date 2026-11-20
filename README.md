@@ -1,8 +1,8 @@
-# VERIGRADE – Tamper-Proof Exam Result Ledger
+# VERIGRADE – Local Tamper-Evident Exam Result Ledger
 
 > *Trust Every Result. Verify Every Record.*
 
-A frontend-only prototype of a premium exam-result ledger dashboard, built for a hackathon with HTML5, CSS3 and Vanilla JavaScript.
+A frontend-only exam-result ledger built with HTML5, CSS3 and Vanilla JavaScript.
 
 ## Problem Statement
 Exam marksheets can be forged or silently edited after publication. Institutions and employers need a clear way to see whether a result is original, pending, or tampered.
@@ -15,24 +15,32 @@ Exam marksheets can be forged or silently edited after publication. Institutions
 ## Features
 - Overview dashboard with live statistics
 - Students list with search, department filter, details and add-student modal
-- Results ledger with search, status filter, pagination, view and download actions
-- Publish Result form with validation
-- Verify Result screen (simulated)
-- Corrections & Approvals with two approvers and a confirmation modal
+- Results ledger with search, integrity filters, pagination, record export and QR display
+- Publish any student result with SHA-256 Web Crypto hashing and a chained `prevHash`
+- Verify records by ID, SHA-256 hash or QR JSON payload
+- Corrections & Approvals with persisted requests and chain re-hashing after approval
 - Audit logs with search and status filter
-- Settings UI, responsive layout, keyboard-friendly controls
+- Settings and ledger records persisted in browser `localStorage`
+- Responsive layout, keyboard-friendly controls and accessible text status labels
 
-> **Important:** All data is synthetic and lives in browser memory. Verification is a **simulated demo**. No cryptography, backend or database is used.
+> **Security limitation:** This is a browser-local demo, not an authoritative credential service. SHA-256 detects edits that do not also rebuild the chain, but localStorage and client-side code can be changed by the browser owner. There is no server, authentication, trusted signing key, or shared ledger across devices. Do not use it to certify real academic records.
 
 ## Technology Stack
-HTML5 · CSS3 · Vanilla JavaScript · Lucide icons (CDN) · Inter font (Google Fonts CDN)
+HTML5 · CSS3 · Vanilla JavaScript · Web Crypto API · Lucide icons (pinned CDN) · QRCode.js (pinned CDN) · Inter font (Google Fonts CDN)
 
 ## Folder Structure
 ```text
 VERIGRADE/
 ├── index.html
+├── ledger.js
 ├── style.css
 ├── script.js
+├── AI_USAGE.md
+├── tests/
+│   └── ledger.test.js
+├── .github/
+│   └── workflows/
+│       └── pages.yml
 ├── README.md
 └── .gitignore
 ```
@@ -42,7 +50,13 @@ VERIGRADE/
 2. Install the **Live Server** extension.
 3. Right-click `index.html` → **Open with Live Server**.
 
-Demo verification: Student ID `STU-1001` with reference `VG-2001` shows *Verified*; `STU-1003` / `VG-2003` shows *Tampered*; `STU-1004` / `VG-2004` shows *Invalid record*; anything else shows *Record not found*.
+Web Crypto requires a secure context; use HTTPS or localhost rather than opening the page directly as a `file://` URL. The QR image is generated locally in the browser; it does not send record data to the QR library CDN.
+
+The ledger starts empty. Add a student or publish a result to create records. A published result includes its record ID, roll number, name, exam, subject, marks, optional metadata, timestamp, `prevHash`, and SHA-256 `hash`. The first record links to the all-zero genesis hash. If stored fields or links change, verification reports the first affected block.
+
+Records, correction requests, audit entries, and settings are saved per browser profile. A QR payload identifies a record but does not contain a server-verifiable signature; another browser can verify it only if it has the same local ledger data.
+
+Run the ledger tests with `node --test tests/ledger.test.js`.
 
 ## Deployment
 The site is published with GitHub Pages from the `main` branch using GitHub Actions. Each push to `main` redeploys the static files; the workflow can also be started manually from the repository's **Actions** tab.
@@ -55,10 +69,10 @@ If GitHub Pages has not been enabled for the repository yet, open **Settings →
 _Add screenshots here._
 
 ## Roadmap
-- Real backend and database
-- Hash-based ledger and cryptographic verification
-- Role-based login for administrators and approvers
-- QR code generation and scanning
+- Authenticated backend and shared database
+- Server-side verification and cryptographic signatures
+- Role-based authentication for administrators and approvers
+- Integrated camera scanning for QR payloads
 
 ## AI Usage Acknowledgement
-_Describe which parts of this project were created with AI assistance._
+See [AI_USAGE.md](./AI_USAGE.md) for AI assistance and human review details.

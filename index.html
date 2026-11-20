@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VERIGRADE – Tamper-Proof Exam Result Ledger</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+  <!-- ===== SIDEBAR ===== -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <i data-lucide="shield-check"></i>
+      <div><strong>VERIGRADE</strong><small>Northbridge University</small></div>
+    </div>
+    <nav id="nav" aria-label="Main navigation">
+      <button class="nav-item active" data-view="overview"><i data-lucide="layout-dashboard"></i>Overview</button>
+      <button class="nav-item" data-view="students"><i data-lucide="users"></i>Students</button>
+      <button class="nav-item" data-view="ledger"><i data-lucide="book-open-check"></i>Results Ledger</button>
+      <button class="nav-item" data-view="publish"><i data-lucide="file-plus-2"></i>Publish Result</button>
+      <button class="nav-item" data-view="verify"><i data-lucide="scan-line"></i>Verify Result</button>
+      <button class="nav-item" data-view="corrections"><i data-lucide="git-pull-request"></i>Corrections &amp; Approvals</button>
+      <button class="nav-item" data-view="audit"><i data-lucide="scroll-text"></i>Audit Logs</button>
+      <button class="nav-item" data-view="settings"><i data-lucide="settings"></i>Settings</button>
+    </nav>
+    <div class="admin-card">
+      <div class="avatar">AR</div>
+      <div><strong>Dr. Anita Rao</strong><small>Administrator</small></div>
+    </div>
+  </aside>
+  <div class="backdrop" id="backdrop"></div>
+
+  <!-- ===== MAIN AREA ===== -->
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="Open menu"><i data-lucide="menu"></i></button>
+      <label class="search-box">
+        <i data-lucide="search"></i>
+        <input type="search" id="globalSearch" placeholder="Search records, then press Enter" aria-label="Global search">
+      </label>
+      <button class="icon-btn" id="bellBtn" aria-label="Notifications"><i data-lucide="bell"></i><span class="dot"></span></button>
+    </header>
+
+    <main class="content">
+      <!-- OVERVIEW -->
+      <section class="view active" id="overview">
+        <div class="page-head"><div><h1>Overview</h1><p>Trust Every Result. Verify Every Record.</p></div>
+          <div class="actions">
+            <button class="btn primary" data-go="publish"><i data-lucide="file-plus-2"></i>Publish result</button>
+            <button class="btn" data-go="verify"><i data-lucide="scan-line"></i>Verify result</button>
+            <button class="btn" data-go="students"><i data-lucide="user-plus"></i>Add student</button>
+          </div></div>
+        <div class="stats" id="stats"></div>
+        <div class="grid-2">
+          <div class="card"><h2>Recent examination results</h2>
+            <div class="table-wrap"><table><thead><tr><th>Student</th><th>Exam</th><th>Marks</th><th>Status</th></tr></thead><tbody id="recentBody"></tbody></table></div></div>
+          <div class="card"><h2>Ledger integrity status</h2>
+            <div class="integrity" id="integrity"></div>
+            <h2 class="sub">Verification overview</h2>
+            <div class="mini-stats" id="verifyOverview"></div></div>
+        </div>
+        <div class="grid-2">
+          <div class="card"><h2>Recent activity</h2><ul class="activity" id="activityList"></ul></div>
+          <div class="card"><h2>Pending correction requests</h2><div id="pendingList"></div></div>
+        </div>
+      </section>
+
+      <!-- STUDENTS -->
+      <section class="view" id="students">
+        <div class="page-head"><div><h1>Students</h1><p>Manage enrolled students.</p></div>
+          <button class="btn primary" id="addStudentBtn"><i data-lucide="user-plus"></i>Add student</button></div>
+        <div class="card">
+          <div class="toolbar">
+            <input type="search" id="studentSearch" placeholder="Search by name, ID or email" aria-label="Search students">
+            <select id="studentDept" aria-label="Filter by department"><option value="">All departments</option></select>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th>Student ID</th><th>Name</th><th>Program</th><th>Department</th><th>Email</th><th></th></tr></thead><tbody id="studentBody"></tbody></table></div>
+          <div class="empty" id="studentEmpty" hidden><i data-lucide="user-x"></i><p>No students match your search. Try a different name or department.</p></div>
+        </div>
+      </section>
+
+      <!-- RESULTS LEDGER -->
+      <section class="view" id="ledger">
+        <div class="page-head"><div><h1>Results Ledger</h1><p>Every published result and its ledger status.</p></div></div>
+        <div class="card">
+          <div class="toolbar">
+            <input type="search" id="ledgerSearch" placeholder="Search by student, ID, exam or subject" aria-label="Search results">
+            <select id="ledgerStatus" aria-label="Filter by status"><option value="">All statuses</option><option>Verified</option><option>Pending</option><option>Tampered</option></select>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th>Student ID</th><th>Name</th><th>Exam</th><th>Subject</th><th>Marks</th><th>Max</th><th>Published</th><th>Status</th><th></th></tr></thead><tbody id="ledgerBody"></tbody></table></div>
+          <div class="empty" id="ledgerEmpty" hidden><i data-lucide="search-x"></i><p>No results found. Clear the filters to see all records.</p></div>
+          <div class="pagination"><span id="pageInfo"></span><div><button class="btn" id="prevPage">Previous</button> <button class="btn" id="nextPage">Next</button></div></div>
+        </div>
+      </section>
+
+      <!-- PUBLISH RESULT -->
+      <section class="view" id="publish">
+        <div class="page-head"><div><h1>Publish Result</h1><p>Add a result to the demo ledger. Nothing is sent to a server.</p></div></div>
+        <form class="card form-grid" id="publishForm" novalidate>
+          <div class="field"><label for="fId">Student ID</label><input id="fId" placeholder="e.g. STU-1001"><span class="err"></span></div>
+          <div class="field"><label for="fName">Student name</label><input id="fName"><span class="err"></span></div>
+          <div class="field"><label for="fExam">Examination name</label><input id="fExam" placeholder="e.g. Semester 5 Final"><span class="err"></span></div>
+          <div class="field"><label for="fCourse">Course</label><input id="fCourse" placeholder="e.g. B.Tech CSE"><span class="err"></span></div>
+          <div class="field"><label for="fSubject">Subject</label><input id="fSubject"><span class="err"></span></div>
+          <div class="field"><label for="fSession">Academic session</label><input id="fSession" placeholder="e.g. 2026-27"><span class="err"></span></div>
+          <div class="field"><label for="fMarks">Marks obtained</label><input id="fMarks" type="number" min="0"><span class="err"></span></div>
+          <div class="field"><label for="fMax">Maximum marks</label><input id="fMax" type="number" min="1"><span class="err"></span></div>
+          <div class="field"><label for="fDate">Publication date</label><input id="fDate" type="date"><span class="err"></span></div>
+          <div class="form-actions"><button type="submit" class="btn primary" id="publishBtn">Publish result</button><button type="button" class="btn" id="clearBtn">Clear form</button></div>
+        </form>
+      </section>
+
+      <!-- VERIFY RESULT -->
+      <section class="view" id="verify">
+        <div class="page-head"><div><h1>Verify Result</h1><p>Public verification screen (simulated demo).</p></div></div>
+        <div class="grid-2">
+          <div class="card verify-card">
+            <div class="qr" aria-hidden="true"><i data-lucide="qr-code"></i><span class="scan-line"></span></div>
+            <p class="muted center">Scan a marksheet QR code, or enter the details below.</p>
+            <div class="field"><label for="vId">Student ID</label><input id="vId" placeholder="STU-1001"></div>
+            <div class="field"><label for="vRef">Verification reference</label><input id="vRef" placeholder="VG-2001"></div>
+            <button class="btn primary wide" id="verifyBtn"><i data-lucide="shield-check"></i>Verify result</button>
+            <p class="notice">Simulated demo only. No cryptographic verification is performed.</p>
+          </div>
+          <div class="card" id="verifyResult"><div class="empty"><i data-lucide="shield-question"></i><p>Enter a student ID and reference to see a result here.</p></div></div>
+        </div>
+      </section>
+
+      <!-- CORRECTIONS -->
+      <section class="view" id="corrections">
+        <div class="page-head"><div><h1>Corrections &amp; Approvals</h1><p>Each correction needs two approvers.</p></div></div>
+        <div id="correctionList" class="cards"></div>
+      </section>
+
+      <!-- AUDIT LOGS -->
+      <section class="view" id="audit">
+        <div class="page-head"><div><h1>Audit Logs</h1><p>A record of every action in the system.</p></div></div>
+        <div class="card">
+          <div class="toolbar">
+            <input type="search" id="auditSearch" placeholder="Search by user, action or record ID" aria-label="Search logs">
+            <select id="auditStatus" aria-label="Filter by status"><option value="">All statuses</option><option>Success</option><option>Warning</option><option>Alert</option></select>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th>Activity ID</th><th>User</th><th>Action</th><th>Record ID</th><th>Timestamp</th><th>Status</th></tr></thead><tbody id="auditBody"></tbody></table></div>
+          <div class="empty" id="auditEmpty" hidden><i data-lucide="search-x"></i><p>No log entries match your filters.</p></div>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section class="view" id="settings">
+        <div class="page-head"><div><h1>Settings</h1><p>Interface controls for the prototype.</p></div><button class="btn primary" id="saveSettings">Save changes</button></div>
+        <div class="grid-2">
+          <div class="card form-stack"><h2>Institution information</h2>
+            <div class="field"><label for="sInst">Institution name</label><input id="sInst" value="Northbridge University"></div>
+            <div class="field"><label for="sEmail">Contact email</label><input id="sEmail" value="registrar@northbridge.edu"></div></div>
+          <div class="card form-stack"><h2>Administrator profile</h2>
+            <div class="field"><label for="sAdmin">Full name</label><input id="sAdmin" value="Dr. Anita Rao"></div>
+            <div class="field"><label for="sRole">Role</label><input id="sRole" value="Administrator"></div></div>
+          <div class="card"><h2>Notification preferences</h2>
+            <label class="switch"><input type="checkbox" checked> Email me about integrity alerts</label>
+            <label class="switch"><input type="checkbox" checked> Notify me of new correction requests</label>
+            <label class="switch"><input type="checkbox"> Weekly activity summary</label></div>
+          <div class="card"><h2>Appearance</h2>
+            <div class="field"><label for="sAccent">Accent colour</label><select id="sAccent"><option value="#168BFF">Neon blue</option><option value="#35D8FF">Cyan</option><option value="#31D69A">Green</option></select></div>
+            <h2 class="sub">Application information</h2>
+            <p class="muted">VERIGRADE v0.1 demo · Frontend prototype · Synthetic data only</p></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ===== MODAL + TOASTS ===== -->
+  <div class="modal-overlay" id="modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-head"><h2 id="modalTitle"></h2><button class="icon-btn" id="modalClose" aria-label="Close dialog"><i data-lucide="x"></i></button></div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-foot" id="modalFoot"></div>
+    </div>
+  </div>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>

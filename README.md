@@ -13,6 +13,7 @@ Exam marksheets can be forged or silently edited after publication. Institutions
 - Offer a public-facing verification screen.
 
 ## Features
+- Welcome page with a clear Get started path into the ledger
 - Overview dashboard with live statistics
 - Students list with search, department filter, details and add-student modal
 - Results ledger with search, integrity filters, pagination, record export and QR display

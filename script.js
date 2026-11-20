@@ -285,6 +285,20 @@
     window.scrollTo(0, 0);
   }
 
+  function enterApp() {
+    $("landingPage").hidden = true;
+    $("appShell").hidden = false;
+    showView("overview");
+  }
+
+  function returnToLanding() {
+    closeMenu();
+    closeModal();
+    $("appShell").hidden = true;
+    $("landingPage").hidden = false;
+    window.scrollTo(0, 0);
+  }
+
   function openMenu() { $("sidebar").classList.add("open"); }
   function closeMenu() { $("sidebar").classList.remove("open"); }
 
@@ -1140,6 +1154,10 @@
   }
 
   function setupEvents() {
+    $("landingOpenBtn").addEventListener("click", enterApp);
+    $("getStartedBtn").addEventListener("click", enterApp);
+    $("landingFinalBtn").addEventListener("click", enterApp);
+    $("landingReturnBtn").addEventListener("click", returnToLanding);
     $("nav").addEventListener("click", function (event) {
       const button = event.target.closest("[data-view]");
       if (button) showView(button.dataset.view);

@@ -10,12 +10,126 @@
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.js" integrity="sha384-LtmWBcrD5iuFIR4sFphS8IiiaftkypL5dJzLKywbyd9ATLB7ZbPz3JYnI9nvXHkV" crossorigin="anonymous"></script>
 </head>
 <body>
+  <section class="landing-page" id="landingPage" aria-labelledby="landingTitle">
+    <div class="landing-inner">
+      <header class="landing-header">
+        <a class="landing-brand" href="#landingTop" aria-label="VeriGrade home">
+          <span class="landing-brand-mark"><i data-lucide="shield-check"></i></span>
+          <span><strong>VERIGRADE</strong><small>TAMPER-EVIDENT EXAM LEDGER</small></span>
+        </a>
+        <nav class="landing-nav" aria-label="Welcome navigation">
+          <a href="#howItWorks">How it works</a>
+          <a href="#security">Security model</a>
+        </nav>
+        <button class="btn landing-open" id="landingOpenBtn" type="button">Open ledger <i data-lucide="arrow-up-right"></i></button>
+      </header>
+
+      <main>
+        <section class="landing-hero" id="landingTop">
+          <div class="landing-copy">
+            <p class="landing-kicker"><span class="glow-dot"></span> BROWSER-LOCAL · SHA-256 LINKED</p>
+            <h1 id="landingTitle">Trust every result.<br><em>Prove every change.</em></h1>
+            <p class="landing-lede">Publish exam results into a cryptographically linked ledger. Verify records by ID, hash, or QR payload—right in your browser.</p>
+            <div class="landing-actions">
+              <button class="btn primary landing-primary" id="getStartedBtn" type="button">Get started <i data-lucide="arrow-right"></i></button>
+              <a class="landing-secondary" href="#howItWorks">See how it works <i data-lucide="arrow-down-right"></i></a>
+            </div>
+            <p class="landing-no-account"><i data-lucide="sparkles"></i> No account needed · Start with an empty ledger</p>
+            <div class="landing-proof" aria-label="Key capabilities">
+              <span><i data-lucide="link-2"></i> SHA-256 chain</span>
+              <span><i data-lucide="qr-code"></i> QR-ready</span>
+              <span><i data-lucide="laptop"></i> Saved in this browser</span>
+            </div>
+          </div>
+
+          <div class="landing-visual" role="img" aria-label="Illustration showing a result record protected by a SHA-256 hash and linked to the previous record">
+            <div class="visual-beam"></div>
+            <div class="visual-orbit orbit-outer"></div>
+            <div class="visual-orbit orbit-inner"></div>
+            <div class="integrity-board">
+              <div class="board-header">
+                <span class="board-mark"><i data-lucide="shield-check"></i></span>
+                <div><strong>INTEGRITY ENGINE</strong><small>How a result joins the chain</small></div>
+                <span class="local-pill"><span class="glow-dot"></span> LOCAL</span>
+              </div>
+              <div class="flow-diagram">
+                <div class="flow-node">
+                  <span class="flow-label">INPUT</span>
+                  <i data-lucide="file-check-2"></i>
+                  <strong>Result record</strong>
+                  <small>Student · exam · marks</small>
+                </div>
+                <div class="flow-connector" aria-hidden="true"><span></span></div>
+                <div class="hash-core">
+                  <i data-lucide="shield-check"></i>
+                  <strong>SHA-256</strong>
+                  <small>hash link</small>
+                </div>
+              </div>
+              <div class="chain-preview">
+                <div class="chain-caption"><span>CHAIN LINK</span><span>Each record connects forward</span></div>
+                <div class="chain-track" aria-hidden="true"><span></span><span></span><span></span><i data-lucide="arrow-right"></i><span class="chain-current"></span></div>
+                <div class="chain-labels"><span>PREVIOUS HASH</span><span>NEW RECORD HASH</span></div>
+              </div>
+              <p class="board-note"><i data-lucide="scan-line"></i> A changed field breaks the verified chain.</p>
+            </div>
+            <div class="visual-caption"><span class="caption-line"></span> EVERY FIELD MATTERS</div>
+          </div>
+        </section>
+
+        <section class="landing-method" id="howItWorks" aria-labelledby="methodTitle">
+          <div class="method-heading">
+            <p class="landing-kicker"><span class="glow-dot"></span> CLEAR BY DESIGN</p>
+            <h2 id="methodTitle">From published marks to<br><em>verifiable records.</em></h2>
+            <p>A straightforward flow that makes record integrity visible.</p>
+          </div>
+          <div class="method-grid">
+            <article class="method-card">
+              <span class="method-number">01</span>
+              <i data-lucide="file-plus-2"></i>
+              <h3>Publish a result</h3>
+              <p>Record the student, exam, subject, marks, and any metadata you need to protect.</p>
+            </article>
+            <article class="method-card">
+              <span class="method-number">02</span>
+              <i data-lucide="git-branch"></i>
+              <h3>Link every block</h3>
+              <p>Each SHA-256 hash includes the previous link, so edits are detectable during an audit.</p>
+            </article>
+            <article class="method-card">
+              <span class="method-number">03</span>
+              <i data-lucide="scan-search"></i>
+              <h3>Verify when needed</h3>
+              <p>Look up a record by ID, hash, or QR payload and see a clear integrity status.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="landing-security" id="security" aria-labelledby="securityTitle">
+          <div class="security-icon"><i data-lucide="lock-keyhole"></i></div>
+          <div>
+            <p class="landing-kicker"><span class="glow-dot"></span> LOCAL-FIRST · HONEST BY DESIGN</p>
+            <h2 id="securityTitle">Your ledger stays in this browser.</h2>
+            <p>This is a browser-local demonstration: records are not shared across devices, and client-side hashes are not institutional signatures. Use it to explore the verification workflow—not to certify real academic records.</p>
+          </div>
+          <button class="btn primary security-cta" id="landingFinalBtn" type="button">Get started <i data-lucide="arrow-right"></i></button>
+        </section>
+      </main>
+
+      <footer class="landing-footer">
+        <span>VERIGRADE <span class="footer-divider">/</span> LOCAL RESULT INTEGRITY</span>
+        <span>Trust every result. Verify every record.</span>
+      </footer>
+    </div>
+  </section>
+
+  <div class="app-shell" id="appShell" hidden>
   <!-- ===== SIDEBAR ===== -->
   <aside class="sidebar" id="sidebar">
-    <div class="brand">
+    <button class="brand brand-home" id="landingReturnBtn" type="button" aria-label="Return to the VeriGrade welcome page">
       <i data-lucide="shield-check"></i>
       <div><strong>VERIGRADE</strong><small id="brandInstitution">Northbridge University</small></div>
-    </div>
+    </button>
     <nav id="nav" aria-label="Main navigation">
       <button class="nav-item active" data-view="overview"><i data-lucide="layout-dashboard"></i>Overview</button>
       <button class="nav-item" data-view="students"><i data-lucide="users"></i>Students</button>
@@ -176,6 +290,7 @@
         </div>
       </section>
     </main>
+  </div>
   </div>
 
   <!-- ===== MODAL + TOASTS ===== -->

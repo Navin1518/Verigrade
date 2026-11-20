@@ -40,7 +40,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
 
 app = Flask(__name__, static_folder=None)          # we serve the frontend manually
-CORS(app, resources={r"/api/*": {"origins": "*"}})  # lets file:// and other ports call us
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 db.init_db()  # create results.db + schema if missing (persistence across restarts)
 

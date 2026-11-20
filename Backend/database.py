@@ -28,7 +28,13 @@ except ImportError:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 #: Where the database lives. Override with the VERIGRADE_DB env var.
-DB_PATH = os.environ.get("VERIGRADE_DB", os.path.join(BASE_DIR, "results.db"))
+RAILWAY_VOLUME = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH")
+if os.environ.get("VERIGRADE_DB"):
+    DB_PATH = os.environ["VERIGRADE_DB"]
+elif RAILWAY_VOLUME:
+    DB_PATH = os.path.join(RAILWAY_VOLUME, "results.db")
+else:
+    DB_PATH = os.path.join(BASE_DIR, "results.db")
 
 #: Column order used for every INSERT (kept in sync with SCHEMA_SQL).
 COLUMNS = (

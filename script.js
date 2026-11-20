@@ -3,6 +3,7 @@
   "use strict";
 
   const Ledger = window.VeriGradeLedger;
+  const API_BASE = "https://web-production-fb17e087.up.railway.app";
   const STORAGE_KEY = "verigrade.state.v1";
   const SCHEMA_VERSION = 1;
   const PAGE_SIZE = 5;
@@ -786,6 +787,21 @@
       };
       const duplicate = Ledger.findDuplicate(state.records, fields);
       if (duplicate) throw new Error(duplicate);
+      const response = await fetch(API_BASE + "/api/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          roll_no: rollNo,
+          student_name: name,
+          subject: fields.subject,
+          exam_session: fields.metadata.session || fields.exam || "2025-2026",
+          marks: fields.marks
+        })
+      });
+      const serverResult = await response.json();
+      if (!response.ok || !serverResult.ok) {
+        throw new Error(serverResult.error || "The server could not publish this result.");
+      }
       const prevHash = state.records.length ? state.records[state.records.length - 1].hash : Ledger.GENESIS_HASH;
       const record = await Ledger.createRecord(fields, prevHash);
       commitState(function (draft) {

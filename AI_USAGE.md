@@ -1,7 +1,7 @@
 # AI Usage
 
 ## Tools used
-- **GitHub Copilot (AI assistant in VS Code):** assisted with the browser-local SHA-256 ledger module, record validation and chaining, localStorage schema checks, QR payload/display flow, verification UI, accessibility/responsive refinements, and focused automated tests.
+- **GitHub Copilot (AI assistant in VS Code):** assisted with the browser-local SHA-256 ledger module, record validation and chaining, localStorage schema checks, QR payload/display flow, verification UI, accessibility/responsive refinements, the default graphite-and-neon-lime theme, and focused automated tests.
 
 ## Human review and testing
 - Automated tests cover valid chains, changed fields, incomplete records, duplicate IDs and results, QR/ID/hash lookup, and malformed payloads.

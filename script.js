@@ -14,9 +14,14 @@
     notifyIntegrity: true,
     notifyCorrections: true,
     weeklySummary: false,
-    accent: "#168BFF"
+    accent: "#C2F23A"
   };
-  const ACCENT_COLORS = ["#168BFF", "#35D8FF", "#31D69A"];
+  const ACCENT_COLORS = ["#C2F23A", "#94D52F", "#E6FF68"];
+  const LEGACY_ACCENT_MAP = {
+    "#168BFF": "#C2F23A",
+    "#35D8FF": "#E6FF68",
+    "#31D69A": "#94D52F"
+  };
 
   let state = createEmptyState();
   let storageWritable = true;
@@ -128,10 +133,13 @@
       if (typeof saved[key] !== "boolean") throw new TypeError("Saved setting " + key + " is invalid.");
       settings[key] = saved[key];
     });
-    if (typeof saved.accent !== "string" || ACCENT_COLORS.indexOf(saved.accent) === -1) {
+    if (typeof saved.accent !== "string") {
       throw new TypeError("Saved accent colour is invalid.");
     }
-    settings.accent = saved.accent;
+    if (ACCENT_COLORS.indexOf(saved.accent) !== -1) settings.accent = saved.accent;
+    else if (Object.prototype.hasOwnProperty.call(LEGACY_ACCENT_MAP, saved.accent)) {
+      settings.accent = LEGACY_ACCENT_MAP[saved.accent];
+    } else throw new TypeError("Saved accent colour is invalid.");
     return settings;
   }
 
@@ -1076,7 +1084,7 @@
     $("notifyCorrections").checked = state.settings.notifyCorrections;
     $("weeklySummary").checked = state.settings.weeklySummary;
     $("sAccent").value = state.settings.accent;
-    document.documentElement.style.setProperty("--blue", state.settings.accent);
+    document.documentElement.style.setProperty("--accent", state.settings.accent);
     $("brandInstitution").textContent = state.settings.institution;
     $("brandAdmin").textContent = state.settings.administrator;
     $("brandRole").textContent = state.settings.role;
@@ -1175,7 +1183,7 @@
     $("verifyBtn").addEventListener("click", runVerification);
     $("saveSettings").addEventListener("click", saveSettings);
     $("sAccent").addEventListener("change", function (event) {
-      document.documentElement.style.setProperty("--blue", event.target.value);
+      document.documentElement.style.setProperty("--accent", event.target.value);
       toast("Preview updated. Save changes to keep this accent.", "warn");
     });
     $("resetStorageBtn").addEventListener("click", resetDamagedStorage);

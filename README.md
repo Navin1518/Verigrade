@@ -21,6 +21,7 @@ Exam marksheets can be forged or silently edited after publication. Institutions
 - Corrections & Approvals with persisted requests and chain re-hashing after approval
 - Audit logs with search and status filter
 - Settings and ledger records persisted in browser `localStorage`
+- Dark graphite and neon-lime theme with adjustable green accents
 - Responsive layout, keyboard-friendly controls and accessible text status labels
 
 > **Security limitation:** This is a browser-local demo, not an authoritative credential service. SHA-256 detects edits that do not also rebuild the chain, but localStorage and client-side code can be changed by the browser owner. There is no server, authentication, trusted signing key, or shared ledger across devices. Do not use it to certify real academic records.

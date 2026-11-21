@@ -381,7 +381,7 @@
     const message = !state.records.length ? "No records yet." :
       (integrityReport.firstIssue ? "First issue: " + safeText(integrityReport.firstIssue.recordId, "unknown record") : "Every stored block verifies.");
     $("integrity").innerHTML = '<div class="ring ' + ringState + '">' + integrity + '</div><div><strong>' + esc(message) +
-      '</strong><p class="muted">SHA-256 chain integrity for this browser.</p></div>';
+      '</strong><p class="muted">SHA-256 chain integrity for the shared ledger.</p></div>';
     $("verifyOverview").innerHTML = [
       ["Verified", verified],
       ["Pending corrections", pending],

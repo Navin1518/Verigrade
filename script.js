@@ -33,6 +33,7 @@
   let pendingAction = null;
   let renderVersion = 0;
   let auditSequence = 0;
+  let serverSynced = false;
 
   function $(id) { return document.getElementById(id); }
 
@@ -814,6 +815,7 @@
       });
       fillDeptFilter();
       clearPublishForm();
+      await syncServerLedger();
       await renderAll();
       toast("Record " + record.id + " was added to the SHA-256 chain.", "ok");
     } catch (error) {
@@ -1133,7 +1135,17 @@
   // Re-audit before rendering status badges so storage edits are visible immediately.
   async function renderAll() {
     const version = ++renderVersion;
-    const report = await Ledger.verifyChain(state.records);
+    const report = serverSynced
+      ? {
+          valid: state.records.every(function (record) {
+            return record._serverStatus === Ledger.STATUS.VERIFIED;
+          }),
+          entries: state.records.map(function (record, index) {
+            return { index: index, status: record._serverStatus || Ledger.STATUS.VERIFIED, record: record };
+          }),
+          firstIssue: null
+        }
+      : await Ledger.verifyChain(state.records);
     if (version !== renderVersion) return;
     integrityReport = report;
     showStorageNotice();
@@ -1148,6 +1160,69 @@
     $("bellBtn").querySelector(".dot").hidden =
       !(state.settings.notifyIntegrity && hasIssues) && !(state.settings.notifyCorrections && hasPending);
     refreshIcons();
+  }
+
+  async function syncServerLedger() {
+    try {
+      const response = await fetch(API_BASE + "/api/records", { cache: "no-store" });
+      if (!response.ok) return false;
+      const result = await response.json();
+      if (!result.ok || !Array.isArray(result.records)) return false;
+
+      const records = [];
+      const students = [];
+      const seenStudents = new Set();
+
+      result.records.forEach(function (item) {
+        const entry = item.record || {};
+        const publishId = item.publish_id;
+        const recordId = entry.id != null ? String(entry.id) : String(publishId);
+        const rollNo = entry.roll_no || "";
+        const studentName = entry.student_name || "Unknown student";
+        const examSession = entry.exam_session || "2025-2026";
+        const record = {
+          id: recordId,
+          rollNo: rollNo,
+          name: studentName,
+          exam: examSession,
+          subject: entry.subject || "",
+          marks: Number(entry.marks),
+          max: 100,
+          timestamp: entry.created_at || new Date().toISOString(),
+          metadata: { session: examSession },
+          prevHash: entry.prev_hash || Ledger.GENESIS_HASH,
+          hash: entry.record_hash || "",
+          _serverStatus: item.status || Ledger.STATUS.VERIFIED
+        };
+        records.push(record);
+
+        const studentKey = rollNo.toLocaleLowerCase();
+        if (rollNo && !seenStudents.has(studentKey)) {
+          seenStudents.add(studentKey);
+          students.push({
+            id: rollNo,
+            name: studentName,
+            program: "",
+            dept: "",
+            email: ""
+          });
+        }
+      });
+
+      const draft = JSON.parse(JSON.stringify(state));
+      draft.records = records;
+      draft.students = students;
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(draft));
+      } catch (error) {
+        // Keep the server data in memory even if browser storage is unavailable.
+      }
+      state = draft;
+      serverSynced = true;
+      return true;
+    } catch (error) {
+      return false;
+    }
   }
 
   function loadSettingsForm() {
@@ -1283,7 +1358,14 @@
   loadSettingsForm();
   fillDeptFilter();
   showStorageNotice();
-  renderAll().catch(function (error) {
-    toast("The ledger could not be audited: " + error.message, "bad");
+  syncServerLedger().then(function () {
+    return renderAll();
+  }).catch(function (error) {
+    toast("The ledger could not be synced or audited: " + error.message, "bad");
   });
+  window.setInterval(function () {
+    syncServerLedger().then(function () {
+      renderAll();
+    });
+  }, 15000);
 }());

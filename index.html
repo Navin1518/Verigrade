@@ -28,18 +28,18 @@
       <main>
         <section class="landing-hero" id="landingTop">
           <div class="landing-copy">
-            <p class="landing-kicker"><span class="glow-dot"></span> BROWSER-LOCAL · SHA-256 LINKED</p>
+            <p class="landing-kicker"><span class="glow-dot"></span> SHARED LEDGER · SHA-256 LINKED</p>
             <h1 id="landingTitle">Trust every result.<br><em>Prove every change.</em></h1>
             <p class="landing-lede">Publish exam results into a cryptographically linked ledger. Verify records by ID, hash, or QR payload—right in your browser.</p>
             <div class="landing-actions">
               <button class="btn primary landing-primary" id="getStartedBtn" type="button">Get started <i data-lucide="arrow-right"></i></button>
               <a class="landing-secondary" href="#howItWorks">See how it works <i data-lucide="arrow-down-right"></i></a>
             </div>
-            <p class="landing-no-account"><i data-lucide="sparkles"></i> No account needed · Start with an empty ledger</p>
+            <p class="landing-no-account"><i data-lucide="sparkles"></i> Shared backend · Records sync across devices</p>
             <div class="landing-proof" aria-label="Key capabilities">
               <span><i data-lucide="link-2"></i> SHA-256 chain</span>
               <span><i data-lucide="qr-code"></i> QR-ready</span>
-              <span><i data-lucide="laptop"></i> Saved in this browser</span>
+              <span><i data-lucide="laptop"></i> Synced across devices</span>
             </div>
           </div>
 
@@ -110,8 +110,8 @@
           <div class="security-icon"><i data-lucide="lock-keyhole"></i></div>
           <div>
             <p class="landing-kicker"><span class="glow-dot"></span> LOCAL-FIRST · HONEST BY DESIGN</p>
-            <h2 id="securityTitle">Your ledger stays in this browser.</h2>
-            <p>This is a browser-local demonstration: records are not shared across devices, and client-side hashes are not institutional signatures. Use it to explore the verification workflow—not to certify real academic records.</p>
+            <h2 id="securityTitle">Your ledger is shared and auditable.</h2>
+            <p>Published records are stored in the shared SQLite-backed API and synchronized across browsers. SHA-256 detection identifies tampering, while QR codes provide quick record lookup and verification.</p>
           </div>
           <button class="btn primary security-cta" id="landingFinalBtn" type="button">Get started <i data-lucide="arrow-right"></i></button>
         </section>
@@ -222,7 +222,7 @@
 
       <!-- PUBLISH RESULT -->
       <section class="view" id="publish">
-        <div class="page-head"><div><h1>Publish Result</h1><p>Add a record to this browser's cryptographically linked ledger.</p></div></div>
+        <div class="page-head"><div><h1>Publish Result</h1><p>Add a record to the shared tamper-evident ledger.</p></div></div>
         <form class="card form-grid" id="publishForm" novalidate>
           <div class="field"><label for="fId">Student ID / roll no.</label><input id="fId" maxlength="100" required placeholder="e.g. CS-2026-1042"><span class="err"></span></div>
           <div class="field"><label for="fName">Student name</label><input id="fName" maxlength="160" required><span class="err"></span></div>
@@ -240,12 +240,12 @@
 
       <!-- VERIFY RESULT -->
       <section class="view" id="verify">
-        <div class="page-head"><div><h1>Verify Result</h1><p>Check a record against this browser's saved ledger.</p></div></div>
+        <div class="page-head"><div><h1>Verify Result</h1><p>Check a record against the shared server ledger.</p></div></div>
         <div class="grid-2">
           <div class="card verify-card">
             <div class="field"><label for="vInput">Record ID, SHA-256 hash, or QR payload</label><textarea id="vInput" rows="4" maxlength="5000" placeholder="Paste an ID, hash, or JSON scanned from a VeriGrade QR"></textarea></div>
             <button class="btn primary wide" id="verifyBtn"><i data-lucide="shield-check"></i>Verify record</button>
-            <p class="notice">A QR from another device can only be verified if its ledger is also saved in this browser.</p>
+            <p class="notice">QR records can be verified from any device connected to VeriGrade.</p>
           </div>
           <div class="card" id="verifyResult" aria-live="polite"><div class="empty"><i data-lucide="shield-question"></i><p>Enter an ID, hash, or QR payload to check the local chain.</p></div></div>
         </div>
@@ -287,7 +287,7 @@
           <div class="card"><h2>Appearance</h2>
             <div class="field"><label for="sAccent">Accent colour</label><select id="sAccent"><option value="#C2F23A">Neon lime</option><option value="#94D52F">Leaf green</option><option value="#E6FF68">Lemon glow</option></select></div>
             <h2 class="sub">Application information</h2>
-            <p class="muted">VERIGRADE · SHA-256 browser-local ledger · No backend or signing key</p></div>
+            <p class="muted">VERIGRADE · SHA-256 shared ledger · SQLite-backed API</p></div>
         </div>
       </section>
     </main>

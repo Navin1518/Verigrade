@@ -25,7 +25,7 @@ Exam marksheets can be forged or silently edited after publication. Institutions
 - Dark graphite and neon-lime theme with adjustable green accents
 - Responsive layout, keyboard-friendly controls and accessible text status labels
 
-> **Security limitation:** This is a browser-local demo, not an authoritative credential service. SHA-256 detects edits that do not also rebuild the chain, but localStorage and client-side code can be changed by the browser owner. There is no server, authentication, trusted signing key, or shared ledger across devices. Do not use it to certify real academic records.
+> **Security limitation:** SHA-256 detects ledger edits that do not rebuild the chain, but this demo does not yet provide user authentication or trusted signing keys. Use it as a tamper-evident record demonstration, not as an authoritative academic credential service.
 
 ## Technology Stack
 HTML5 · CSS3 · Vanilla JavaScript · Web Crypto API · Lucide icons (pinned CDN) · QRCode.js (pinned CDN) · Inter font (Google Fonts CDN)

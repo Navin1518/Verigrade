@@ -635,9 +635,15 @@
       toast("QR sharing is disabled: this record is not verified.", "bad");
       return;
     }
-    const payload = Ledger.createQrPayload(record);
+    const payload = serverSynced
+      ? JSON.stringify({
+          t: "VERIGRADE1",
+          id: Number(record.id),
+          h: record.hash
+        })
+      : Ledger.createQrPayload(record);
     const body = '<div id="qrCode" class="qr-code" role="img" aria-label="QR code for record ' + esc(record.id) + '"></div>' +
-      '<p class="muted">Scan this code, then paste its JSON into Verify Result on a browser with the same saved ledger.</p>' +
+      '<p class="muted">Scan this code, or paste its JSON into Verify Result on any browser connected to the shared VeriGrade backend.</p>' +
       '<label for="qrPayload">QR payload</label><textarea id="qrPayload" rows="3" readonly>' + esc(payload) + "</textarea>";
     openModal("Record verification QR", body, [
       {
@@ -796,7 +802,8 @@
           student_name: name,
           subject: fields.subject,
           exam_session: fields.metadata.session || fields.exam || "2025-2026",
-          marks: fields.marks
+          marks: fields.marks,
+          max_marks: fields.max
         })
       });
       const serverResult = await response.json();
@@ -857,9 +864,25 @@
         ["SHA-256 hash", '<code class="hash-value">' + esc(record.hash) + "</code>"]
       ]);
     }
-    html += '<p class="notice">This verifies only the browser-local hash chain; it is not a server-signed academic credential.</p></div>';
+    html += '<p class="notice">Verification is checked against the shared server ledger and its SHA-256 chain.</p></div>';
     $("verifyResult").innerHTML = html;
     refreshIcons();
+  }
+
+  function normalizeServerVerificationRecord(record) {
+    if (!record || typeof record !== "object") return null;
+    return {
+      id: record.id != null ? String(record.id) : "",
+      rollNo: record.roll_no || "",
+      name: record.student_name || "",
+      exam: record.exam_session || "",
+      subject: record.subject || "",
+      marks: Number(record.marks),
+      max: Number(record.max_marks) > 0 ? Number(record.max_marks) : 100,
+      timestamp: record.created_at || "",
+      hash: record.record_hash || "",
+      prevHash: record.prev_hash || ""
+    };
   }
 
   async function runVerification() {
@@ -887,7 +910,7 @@
         if (response.ok && serverResult.status) {
           renderVerification({
             status: serverResult.status,
-            record: serverResult.record || null,
+            record: normalizeServerVerificationRecord(serverResult.record),
             reason: serverResult.message || serverResult.reason || ""
           });
           commitState(function (draft) {
@@ -1189,7 +1212,7 @@
           exam: examSession,
           subject: entry.subject || "",
           marks: Number(entry.marks),
-          max: 100,
+          max: Number(entry.max_marks) > 0 ? Number(entry.max_marks) : 100,
           timestamp: entry.created_at || new Date().toISOString(),
           metadata: { session: examSession },
           prevHash: entry.prev_hash || Ledger.GENESIS_HASH,

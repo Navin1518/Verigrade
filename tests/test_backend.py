@@ -38,10 +38,12 @@ class BackendApiTests(unittest.TestCase):
             "subject": "Computer Science",
             "exam_session": "2025-2026",
             "marks": 92,
+            "max_marks": 100,
         })
         self.assertEqual(response.status_code, 201)
         publish = response.get_json()
         record_id = publish["record"]["id"]
+        self.assertEqual(publish["record"]["max_marks"], 100)
 
         verified = self.client.post("/api/verify", json={"record_id": record_id})
         self.assertEqual(verified.status_code, 200)

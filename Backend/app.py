@@ -165,6 +165,19 @@ def parse_result_payload(payload):
     else:
         clean["marks"] = marks
 
+    max_marks = payload.get("max_marks", payload.get("max"))
+    if max_marks is None:
+        max_marks = 100
+    max_marks, max_problem = clean_marks(max_marks, "max_marks")
+    if max_problem:
+        problems.append(max_problem)
+    elif max_marks <= 0:
+        problems.append("'max_marks' must be greater than 0.")
+    else:
+        clean["max_marks"] = max_marks
+        if clean.get("marks") is not None and clean["marks"] > max_marks:
+            problems.append("'marks' cannot be greater than 'max_marks'.")
+
     if problems:
         return None, problems
     return clean, []
@@ -305,6 +318,7 @@ def publish_result():
         "student_name": clean["student_name"],
         "subject": clean["subject"],
         "marks": clean["marks"],
+        "max_marks": clean["max_marks"],
         "exam_session": clean["exam_session"],
         "target_id": None,
         "supersedes_id": None,
@@ -523,6 +537,7 @@ def create_correction():
         "student_name": publisher.get("student_name"),
         "subject": publisher.get("subject"),
         "marks": new_marks,
+        "max_marks": ledger._as_int(publisher.get("max_marks")) or 100,
         "exam_session": publisher.get("exam_session"),
         "target_id": ledger._as_int(publisher.get("id")),
         "supersedes_id": ledger._as_int(effective.get("id")),

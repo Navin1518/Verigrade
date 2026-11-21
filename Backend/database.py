@@ -38,7 +38,7 @@ else:
 
 #: Column order used for every INSERT (kept in sync with SCHEMA_SQL).
 COLUMNS = (
-    "entry_type", "roll_no", "student_name", "subject", "marks", "exam_session",
+    "entry_type", "roll_no", "student_name", "subject", "marks", "max_marks", "exam_session",
     "target_id", "supersedes_id", "reason", "approver_1", "approver_2",
     "prev_hash", "record_hash", "created_at",
 )
@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS ledger (
     student_name  TEXT,
     subject       TEXT,
     marks         INTEGER,
+    max_marks     INTEGER,
     exam_session  TEXT,
     target_id     INTEGER,            -- corrections: id of the original PUBLISH row
     supersedes_id INTEGER,            -- corrections: id of the entry that was current
@@ -99,6 +100,9 @@ def init_db() -> None:
     """Create the table and indexes if they do not exist yet (idempotent)."""
     with get_connection() as conn:
         conn.executescript(SCHEMA_SQL)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(ledger)").fetchall()}
+        if "max_marks" not in columns:
+            conn.execute("ALTER TABLE ledger ADD COLUMN max_marks INTEGER")
 
 
 def fetch_all_entries() -> List[Dict[str, Any]]:

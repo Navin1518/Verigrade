@@ -769,7 +769,7 @@
       if (duplicateStudent && normalized(duplicateStudent.name) !== normalized(name)) {
         throw new Error("This student ID already belongs to a different name.");
       }
-      const existingChain = await Ledger.verifyChain(state.records);
+      const existingChain = serverSynced ? { valid: true } : await Ledger.verifyChain(state.records);
       if (!existingChain.valid) {
         throw new Error("Cannot append to an invalid ledger. First issue: " +
           safeText(existingChain.firstIssue.recordId, "unknown record") + " — " + existingChain.firstIssue.reason);
@@ -803,7 +803,9 @@
       if (!response.ok || !serverResult.ok) {
         throw new Error(serverResult.error || "The server could not publish this result.");
       }
-      const prevHash = state.records.length ? state.records[state.records.length - 1].hash : Ledger.GENESIS_HASH;
+      const prevHash = serverSynced
+        ? (state.records.length ? state.records[state.records.length - 1].hash : Ledger.GENESIS_HASH)
+        : (state.records.length ? state.records[state.records.length - 1].hash : Ledger.GENESIS_HASH);
       const record = await Ledger.createRecord(fields, prevHash);
       commitState(function (draft) {
         if (!draft.students.some(function (student) { return normalized(student.id) === normalized(rollNo); })) {

@@ -77,6 +77,7 @@ If GitHub Pages has not been enabled for the repository yet, open **Settings →
 py -m venv .venv
 .\\.venv\\Scripts\\Activate.ps1
 pip install -r Backend/requirements.txt
+python -m Backend.migrate_db
 python Backend/app.py
 ```
 
@@ -85,7 +86,7 @@ The app is available at `http://127.0.0.1:5000`.
 ### Deploy the backend with Railway
 1. Open Railway and choose **Deploy from GitHub repo**.
 2. Select `Navin1518/Verigrade`.
-3. Railway will use `railway.json` and start the Flask app with Gunicorn.
+3. Railway will use `railway.json`, apply Alembic migrations, and then start Flask with Gunicorn.
 4. Open **Settings -> Networking -> Generate Domain**.
 5. The generated URL is the public backend URL.
 
@@ -96,6 +97,19 @@ Configure these Railway environment variables:
 - `VERIGRADE_COOKIE_SECURE`: set to `1` in HTTPS production deployments.
 - `VERIGRADE_ADMIN_EMAIL`: email address of the account to bootstrap as the initial administrator.
 - `VERIGRADE_API_KEYS`: backend-only credentials with publisher/approver roles for direct API integrations. The frontend no longer collects or sends these keys.
+- `DATABASE_URL`: optional PostgreSQL connection URL. Without it, the backend uses SQLite at `VERIGRADE_DB` or the Railway volume path.
+
+### PostgreSQL migration and recovery
+
+The backend supports SQLite for local development and PostgreSQL for production. Alembic migrations run before Gunicorn starts. To migrate the Railway SQLite database safely:
+
+1. Create a Railway PostgreSQL service and take a backup of the existing SQLite volume from its **Backups** tab. Do not remove the existing volume.
+2. Add a temporary Railway variable named `VERIGRADE_MIGRATION_DATABASE_URL` that references the PostgreSQL service URL. Keep `DATABASE_URL` unset so the app continues using SQLite.
+3. Run `python -m Backend.migrate_db` in the web service to initialize the PostgreSQL schema, then run `python -m Backend.migrate_sqlite_to_postgres --source /data/results.db`. The migration refuses a non-empty target and verifies source and destination ledger integrity and row counts. Never print or share the connection URL.
+4. After verification succeeds, set `DATABASE_URL` to the PostgreSQL service URL, remove the temporary migration variable, and deploy. Keep the SQLite volume and its backup until the PostgreSQL deployment is verified.
+5. Enable scheduled PostgreSQL backups from the database service's **Backups** tab. Test restoration into a separate database service before relying on backups for recovery; do not restore over the active production database.
+
+Keep the backup files and database URLs private: the database contains student records and password hashes.
 
 ## Screenshots
 _Add screenshots here._

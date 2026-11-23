@@ -8,4 +8,4 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8080
 
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT} --workers 2 --timeout 120 Backend.app:app"]
+CMD ["sh", "-c", "python -m Backend.migrate_db && gunicorn --bind 0.0.0.0:${PORT} --workers 2 --timeout 120 Backend.app:app"]

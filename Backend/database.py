@@ -1,43 +1,38 @@
-"""
-database.py
-===========
-SQLite persistence layer for VeriGrade.
-
-The whole application state lives in ONE table, ``ledger``. It is append-only:
-the application never updates or deletes rows itself. That is exactly what
-makes the SHA-256 chain meaningful — if somebody edits a row directly with
-the ``sqlite3`` shell, the audit endpoint hashes the *current* values, the
-digest no longer matches, and the exact tampered row is reported.
-
-This module knows nothing about hashing; it only moves dictionaries in and out
-of SQLite. ``ledger.py`` turns those dictionaries into hashes.
-"""
+"""Database persistence for SQLite development and PostgreSQL deployments."""
 
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import psycopg
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.exc import IntegrityError as SQLAlchemyIntegrityError
+
 try:
+    from .db_config import database_url, is_sqlite_url, sqlite_path
     from .ledger import GENESIS_HASH
 except ImportError:
+    from db_config import database_url, is_sqlite_url, sqlite_path
     from ledger import GENESIS_HASH
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATABASE_URL = database_url()
+IS_SQLITE = is_sqlite_url(DATABASE_URL)
+DB_PATH = sqlite_path() if IS_SQLITE else None
+INTEGRITY_ERRORS = (
+    sqlite3.IntegrityError,
+    psycopg.IntegrityError,
+    SQLAlchemyIntegrityError,
+)
 
-#: Where the database lives. Override with the VERIGRADE_DB env var.
-RAILWAY_VOLUME = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH")
-if os.environ.get("VERIGRADE_DB"):
-    DB_PATH = os.environ["VERIGRADE_DB"]
-elif RAILWAY_VOLUME:
-    DB_PATH = os.path.join(RAILWAY_VOLUME, "results.db")
-else:
-    DB_PATH = os.path.join(BASE_DIR, "results.db")
-
-#: Column order used for every INSERT (kept in sync with SCHEMA_SQL).
+#: Column order used for every ledger INSERT.
 COLUMNS = (
     "entry_type", "roll_no", "student_name", "subject", "marks", "max_marks", "exam_session",
     "target_id", "supersedes_id", "reason", "approver_1", "approver_2",
@@ -45,147 +40,110 @@ COLUMNS = (
 )
 USER_ROLES = {"viewer", "publisher", "approver", "admin"}
 
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS ledger (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    entry_type    TEXT NOT NULL,      -- PUBLISH | CORRECTION
-    roll_no       TEXT,
-    student_name  TEXT,
-    subject       TEXT,
-    marks         INTEGER,
-    max_marks     INTEGER,
-    exam_session  TEXT,
-    target_id     INTEGER,            -- corrections: id of the original PUBLISH row
-    supersedes_id INTEGER,            -- corrections: id of the entry that was current
-    reason        TEXT,
-    approver_1    TEXT,
-    approver_2    TEXT,
-    prev_hash     TEXT,               -- hash of the previous ledger entry
-    record_hash   TEXT,               -- SHA-256 of this entry (incl. prev_hash)
-    created_at    TEXT
-);
+engine_options = {"pool_pre_ping": True, "hide_parameters": True}
+if IS_SQLITE:
+    engine_options["connect_args"] = {"timeout": 15, "check_same_thread": False}
+engine = create_engine(DATABASE_URL, **engine_options)
 
-CREATE INDEX IF NOT EXISTS idx_ledger_key
-    ON ledger (roll_no, subject, exam_session);
+if IS_SQLITE:
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_record_hash
-    ON ledger (record_hash);
-
-CREATE TRIGGER IF NOT EXISTS trg_ledger_publish_unique
-BEFORE INSERT ON ledger
-WHEN NEW.entry_type = 'PUBLISH'
- AND EXISTS (
-     SELECT 1 FROM ledger
-     WHERE entry_type = 'PUBLISH'
-       AND lower(trim(roll_no)) = lower(trim(NEW.roll_no))
-       AND lower(trim(subject)) = lower(trim(NEW.subject))
-       AND lower(trim(exam_session)) = lower(trim(NEW.exam_session))
- )
-BEGIN
-    SELECT RAISE(ABORT, 'DUPLICATE_PUBLISH');
-END;
-
-CREATE TABLE IF NOT EXISTS ledger_metadata (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'viewer',
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS correction_requests (
-    id TEXT PRIMARY KEY,
-    target_id INTEGER NOT NULL REFERENCES ledger(id),
-    original_marks INTEGER NOT NULL,
-    requested_marks INTEGER NOT NULL,
-    reason TEXT NOT NULL,
-    requester_user_id INTEGER NOT NULL REFERENCES users(id),
-    status TEXT NOT NULL DEFAULT 'Pending'
-        CHECK (status IN ('Pending', 'Approved', 'Rejected')),
-    approver_1_user_id INTEGER REFERENCES users(id),
-    approver_2_user_id INTEGER REFERENCES users(id),
-    rejected_by_user_id INTEGER REFERENCES users(id),
-    correction_entry_id INTEGER REFERENCES ledger(id),
-    rejection_reason TEXT,
-    created_at TEXT NOT NULL,
-    decided_at TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_correction_requests_status_created
-    ON correction_requests (status, created_at DESC);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_correction_requests_pending_target
-    ON correction_requests (target_id) WHERE status = 'Pending';
-"""
+    @event.listens_for(engine, "connect")
+    def enable_sqlite_foreign_keys(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 @contextmanager
 def get_connection():
-    """
-    Yield a SQLite connection and guarantee commit/rollback + close.
+    """Yield a dialect-neutral connection and commit or roll back atomically."""
+    if IS_SQLITE and DB_PATH:
+        directory = os.path.dirname(DB_PATH)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+    with engine.begin() as connection:
+        yield ConnectionAdapter(connection)
 
-    ``row_factory = sqlite3.Row`` lets us read columns by name, which keeps
-    the rest of the code readable.
-    """
-    directory = os.path.dirname(DB_PATH)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
 
-    conn = sqlite3.connect(DB_PATH, timeout=15)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+class ResultAdapter:
+    def __init__(self, result):
+        self._result = result.mappings()
+        self.rowcount = result.rowcount
+
+    def fetchone(self):
+        return self._result.fetchone()
+
+    def fetchall(self):
+        return self._result.fetchall()
+
+
+class ConnectionAdapter:
+    def __init__(self, connection):
+        self._connection = connection
+
+    def execute(self, statement, params=()):
+        if statement.strip().upper() == "BEGIN IMMEDIATE":
+            self._connection.exec_driver_sql(statement)
+            return ResultAdapter(self._connection.exec_driver_sql("SELECT 1"))
+        placeholders = []
+
+        def bind_placeholder(_match):
+            name = "p" + str(len(placeholders))
+            placeholders.append(name)
+            return ":" + name
+
+        converted = re.sub(r"\?", bind_placeholder, statement)
+        values = dict(zip(placeholders, params)) if placeholders else {}
+        return ResultAdapter(self._connection.execute(text(converted), values))
+
+
+def begin_write_transaction(conn: ConnectionAdapter) -> None:
+    if IS_SQLITE:
+        conn.execute("BEGIN IMMEDIATE")
+    else:
+        conn.execute("SELECT pg_advisory_xact_lock(?)", (741009812,))
+
+
+def raise_integrity_error(message: str) -> None:
+    error_type = sqlite3.IntegrityError if IS_SQLITE else psycopg.IntegrityError
+    raise error_type(message)
 
 
 def init_db() -> None:
-    """Create the table and indexes if they do not exist yet (idempotent)."""
-    with get_connection() as conn:
-        conn.executescript(SCHEMA_SQL)
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(ledger)").fetchall()}
-        if "max_marks" not in columns:
-            conn.execute("ALTER TABLE ledger ADD COLUMN max_marks INTEGER")
-        migrate_hash_v2(conn)
+    """Apply schema migrations and any remaining one-time data migrations."""
+    config = Config(os.path.join(BASE_DIR, "..", "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
+    command.upgrade(config, "head")
+    migrate_hash_v2()
 
 
-def migrate_hash_v2(conn: sqlite3.Connection) -> None:
+def migrate_hash_v2() -> None:
     """One-time migration that includes max_marks in every ledger hash."""
-    migration = conn.execute(
-        "SELECT value FROM ledger_metadata WHERE key = 'hash_payload_v2'"
-    ).fetchone()
-    if migration:
-        return
-
     try:
         from .ledger import prepare_entry
     except ImportError:
         from ledger import prepare_entry
-    rows = conn.execute("SELECT * FROM ledger ORDER BY id ASC").fetchall()
-    prev_hash = GENESIS_HASH
-    for row in rows:
-        entry = dict(row)
-        entry["max_marks"] = entry.get("max_marks") or 100
-        prepared = prepare_entry(entry, prev_hash)
+    with get_connection() as conn:
+        migration = conn.execute(
+            "SELECT value FROM ledger_metadata WHERE key = 'hash_payload_v2'"
+        ).fetchone()
+        if migration:
+            return
+        rows = conn.execute("SELECT * FROM ledger ORDER BY id ASC").fetchall()
+        prev_hash = GENESIS_HASH
+        for row in rows:
+            entry = dict(row)
+            entry["max_marks"] = entry.get("max_marks") or 100
+            prepared = prepare_entry(entry, prev_hash)
+            conn.execute(
+                "UPDATE ledger SET max_marks = ?, prev_hash = ?, record_hash = ? WHERE id = ?",
+                (entry["max_marks"], prepared["prev_hash"], prepared["record_hash"], entry["id"]),
+            )
+            prev_hash = prepared["record_hash"]
         conn.execute(
-            "UPDATE ledger SET max_marks = ?, prev_hash = ?, record_hash = ? WHERE id = ?",
-            (entry["max_marks"], prepared["prev_hash"], prepared["record_hash"], entry["id"]),
+            "INSERT INTO ledger_metadata (key, value) VALUES ('hash_payload_v2', '1') "
+            "ON CONFLICT (key) DO UPDATE SET value = excluded.value"
         )
-        prev_hash = prepared["record_hash"]
-    conn.execute(
-        "INSERT OR REPLACE INTO ledger_metadata (key, value) VALUES ('hash_payload_v2', '1')"
-    )
 
 
 def fetch_all_entries() -> List[Dict[str, Any]]:
@@ -219,11 +177,11 @@ def fetch_tip_hash() -> str:
 def insert_entry(entry: Dict[str, Any]) -> int:
     """Append one row to the ledger and return its new id."""
     placeholders = ", ".join("?" for _ in COLUMNS)
-    sql = f"INSERT INTO ledger ({', '.join(COLUMNS)}) VALUES ({placeholders})"
+    sql = f"INSERT INTO ledger ({', '.join(COLUMNS)}) VALUES ({placeholders}) RETURNING id"
     values = [entry.get(column) for column in COLUMNS]
     with get_connection() as conn:
-        cursor = conn.execute(sql, values)
-        new_id = cursor.lastrowid
+        row = conn.execute(sql, values).fetchone()
+        new_id = row["id"]
     return int(new_id)
 
 
@@ -241,10 +199,10 @@ def append_entry(
         from ledger import prepare_entry
 
     placeholders = ", ".join("?" for _ in COLUMNS)
-    sql = f"INSERT INTO ledger ({', '.join(COLUMNS)}) VALUES ({placeholders})"
+    sql = f"INSERT INTO ledger ({', '.join(COLUMNS)}) VALUES ({placeholders}) RETURNING id"
 
     with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_write_transaction(conn)
         correction_request = None
         if correction_request_id:
             correction_request = conn.execute(
@@ -252,16 +210,16 @@ def append_entry(
                 (correction_request_id,),
             ).fetchone()
             if not correction_request or correction_request["status"] != "Pending":
-                raise sqlite3.IntegrityError("CORRECTION_REQUEST_NOT_PENDING")
+                raise_integrity_error("CORRECTION_REQUEST_NOT_PENDING")
             requested_target_id = int(correction_request["target_id"])
             if requested_target_id != int(entry.get("supersedes_id") or 0):
-                raise sqlite3.IntegrityError("STALE_CORRECTION_REQUEST")
+                raise_integrity_error("STALE_CORRECTION_REQUEST")
             target = conn.execute(
                 "SELECT entry_type, target_id FROM ledger WHERE id = ?",
                 (requested_target_id,),
             ).fetchone()
             if not target:
-                raise sqlite3.IntegrityError("STALE_CORRECTION_REQUEST")
+                raise_integrity_error("STALE_CORRECTION_REQUEST")
             publish_id = (
                 int(target["target_id"])
                 if target["entry_type"] == "CORRECTION"
@@ -275,7 +233,7 @@ def append_entry(
             ).fetchone()
             current_id = int(latest_correction["id"]) if latest_correction else publish_id
             if current_id != requested_target_id:
-                raise sqlite3.IntegrityError("STALE_CORRECTION_REQUEST")
+                raise_integrity_error("STALE_CORRECTION_REQUEST")
         if duplicate_key is not None:
             roll_no, subject, exam_session = duplicate_key
             existing = conn.execute(
@@ -288,7 +246,7 @@ def append_entry(
                 (roll_no, subject, exam_session),
             ).fetchone()
             if existing:
-                raise sqlite3.IntegrityError("DUPLICATE_PUBLISH")
+                raise_integrity_error("DUPLICATE_PUBLISH")
 
         tip = conn.execute(
             "SELECT record_hash FROM ledger ORDER BY id DESC LIMIT 1"
@@ -299,14 +257,14 @@ def append_entry(
             else GENESIS_HASH
         )
         prepared = prepare_entry(entry, prev_hash)
-        cursor = conn.execute(
+        inserted = conn.execute(
             sql,
             [prepared.get(column) for column in COLUMNS],
-        )
-        new_id = int(cursor.lastrowid)
+        ).fetchone()
+        new_id = int(inserted["id"])
         if correction_request_id:
             if not approver_user_ids or len(approver_user_ids) != 2 or approver_user_ids[0] == approver_user_ids[1]:
-                raise sqlite3.IntegrityError("APPROVERS_NOT_DISTINCT")
+                raise_integrity_error("APPROVERS_NOT_DISTINCT")
             updated = conn.execute(
                 "UPDATE correction_requests SET status = 'Approved', "
                 "approver_1_user_id = ?, approver_2_user_id = ?, "
@@ -321,7 +279,7 @@ def append_entry(
                 ),
             )
             if updated.rowcount != 1:
-                raise sqlite3.IntegrityError("CORRECTION_REQUEST_NOT_PENDING")
+                raise_integrity_error("CORRECTION_REQUEST_NOT_PENDING")
         prepared["id"] = new_id
         entry.clear()
         entry.update(prepared)
@@ -385,7 +343,7 @@ def update_user_role(user_id: int, role: str) -> Optional[Dict[str, Any]]:
     if role not in USER_ROLES:
         raise ValueError("Invalid user role.")
     with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_write_transaction(conn)
         current = conn.execute(
             "SELECT role FROM users WHERE id = ?", (user_id,)
         ).fetchone()
@@ -393,8 +351,8 @@ def update_user_role(user_id: int, role: str) -> Optional[Dict[str, Any]]:
             return None
         if current["role"] == "admin" and role != "admin":
             admin_count = conn.execute(
-                "SELECT COUNT(*) FROM users WHERE role = 'admin'"
-            ).fetchone()[0]
+                "SELECT COUNT(*) AS admin_count FROM users WHERE role = 'admin'"
+            ).fetchone()["admin_count"]
             if admin_count <= 1:
                 raise ValueError("The last administrator cannot be demoted.")
         conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
@@ -407,9 +365,9 @@ def update_user_role(user_id: int, role: str) -> Optional[Dict[str, Any]]:
 
 def create_user(name: str, email: str, password_hash: str, role: str = "viewer") -> Dict[str, Any]:
     with get_connection() as conn:
-        cursor = conn.execute(
+        row = conn.execute(
             "INSERT INTO users (name, email, password_hash, role, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?) RETURNING id",
             (
                 name.strip(),
                 email.strip().lower(),
@@ -417,8 +375,8 @@ def create_user(name: str, email: str, password_hash: str, role: str = "viewer")
                 role,
                 datetime.now(timezone.utc).isoformat(),
             ),
-        )
-        user_id = int(cursor.lastrowid)
+        ).fetchone()
+        user_id = int(row["id"])
     return {"id": user_id, "name": name.strip(), "email": email.strip().lower(), "role": role}
 
 
@@ -449,7 +407,7 @@ def create_correction_request(
     created_at: str,
 ) -> Dict[str, Any]:
     with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_write_transaction(conn)
         conn.execute(
             "INSERT INTO correction_requests "
             "(id, target_id, original_marks, requested_marks, reason, requester_user_id, created_at) "
@@ -493,7 +451,7 @@ def reject_correction_request(
     decided_at: str,
 ) -> Optional[Dict[str, Any]]:
     with get_connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_write_transaction(conn)
         updated = conn.execute(
             "UPDATE correction_requests SET status = 'Rejected', "
             "rejected_by_user_id = ?, rejection_reason = ?, decided_at = ? "

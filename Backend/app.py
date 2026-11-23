@@ -22,7 +22,6 @@ import hmac
 import os
 import re
 import secrets
-import sqlite3
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -68,7 +67,6 @@ CORS(
     supports_credentials=True,
 )
 
-db.init_db()  # create results.db + schema if missing (persistence across restarts)
 
 DEFAULT_SESSION = "2025-2026"
 CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
@@ -403,7 +401,7 @@ def signup():
             email,
             generate_password_hash(password, method="scrypt"),
         )
-    except sqlite3.IntegrityError:
+    except db.INTEGRITY_ERRORS:
         return api_error("An account with this email already exists.", "EMAIL_EXISTS", 409)
 
     user = promote_configured_admin(user)
@@ -621,7 +619,7 @@ def publish_result():
             entry,
             (clean["roll_no"], clean["subject"], clean["exam_session"]),
         )
-    except sqlite3.IntegrityError as exc:
+    except db.INTEGRITY_ERRORS as exc:
         if "DUPLICATE_PUBLISH" in str(exc):
             existing = db.find_publish(
                 clean["roll_no"], clean["subject"], clean["exam_session"]
@@ -826,7 +824,7 @@ def submit_correction_request():
             requester_user_id=user["id"],
             created_at=ledger.utc_now_iso(),
         )
-    except sqlite3.IntegrityError as exc:
+    except db.INTEGRITY_ERRORS as exc:
         if "correction_requests.target_id" in str(exc):
             return api_error(
                 "A pending correction request already exists for this result.",
@@ -926,7 +924,7 @@ def approve_correction_request(request_id: str):
             correction_request_id=request_id,
             approver_user_ids=(user["id"], second_user["id"]),
         )
-    except sqlite3.IntegrityError as exc:
+    except db.INTEGRITY_ERRORS as exc:
         message = str(exc)
         if "CORRECTION_REQUEST_NOT_PENDING" in message:
             return api_error("This correction request is no longer pending.", "REQUEST_NOT_PENDING", 409)
@@ -1157,7 +1155,7 @@ def create_correction():
     }
     try:
         entry_id = db.append_entry(entry)
-    except sqlite3.IntegrityError as exc:
+    except db.INTEGRITY_ERRORS as exc:
         return api_error(f"The ledger rejected this correction ({exc}).", "INSERT_FAILED", 409)
 
     entry["id"] = entry_id

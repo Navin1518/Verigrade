@@ -25,12 +25,14 @@ import app as backend
 class BackendApiTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
+        backend.db.engine.dispose()
         try:
             os.remove(TEST_DB)
         except FileNotFoundError:
             pass
 
     def setUp(self):
+        backend.db.init_db()
         self.client = backend.app.test_client()
         with backend.db.get_connection() as conn:
             conn.execute("DELETE FROM correction_requests")

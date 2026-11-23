@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -32,6 +33,7 @@ class BackendApiTests(unittest.TestCase):
     def setUp(self):
         self.client = backend.app.test_client()
         with backend.db.get_connection() as conn:
+            conn.execute("DELETE FROM correction_requests")
             conn.execute("DELETE FROM ledger")
 
     def publish_headers(self):
@@ -316,6 +318,213 @@ class BackendApiTests(unittest.TestCase):
         record = approved.get_json()["record"]
         self.assertEqual(record["approver_1"], "Approver One Session")
         self.assertEqual(record["approver_2"], "Approver Two Session")
+
+    def test_persistent_correction_request_approval_and_rejection(self):
+        requester = self.client
+        requester_signup = requester.post("/api/auth/signup", json={
+            "name": "Correction Requester",
+            "email": "correction-requester@example.com",
+            "password": "StrongPass123",
+        })
+        approver_one = backend.app.test_client()
+        approver_one_signup = approver_one.post("/api/auth/signup", json={
+            "name": "Persistent Approver One",
+            "email": "persistent-approver-one@example.com",
+            "password": "StrongPass123",
+        })
+        approver_two = backend.app.test_client()
+        approver_two.post("/api/auth/signup", json={
+            "name": "Persistent Approver Two",
+            "email": "persistent-approver-two@example.com",
+            "password": "StrongPass123",
+        })
+        backend.db.update_user_role(
+            backend.db.find_user_by_email("persistent-approver-one@example.com")["id"],
+            "approver",
+        )
+        backend.db.update_user_role(
+            backend.db.find_user_by_email("persistent-approver-two@example.com")["id"],
+            "approver",
+        )
+
+        published = backend.app.test_client().post(
+            "/api/publish",
+            headers=self.publish_headers(),
+            json={
+                "roll_no": "PERSISTENT-COR-001",
+                "student_name": "Persistent Student",
+                "subject": "Biology",
+                "marks": 70,
+                "max_marks": 100,
+            },
+        )
+        record_id = published.get_json()["record"]["id"]
+        request_payload = {
+            "target_id": record_id,
+            "requested_marks": 75,
+            "reason": "The original answer sheet confirms these marks.",
+        }
+        no_csrf = requester.post("/api/correction-requests", json=request_payload)
+        self.assertEqual(no_csrf.status_code, 403)
+        self.assertEqual(no_csrf.get_json()["code"], "CSRF_FAILED")
+
+        submitted = requester.post(
+            "/api/correction-requests",
+            headers={"X-CSRF-Token": requester_signup.get_json()["csrf_token"]},
+            json=request_payload,
+        )
+        self.assertEqual(submitted.status_code, 201)
+        request_id = submitted.get_json()["request"]["id"]
+        duplicate = requester.post(
+            "/api/correction-requests",
+            headers={"X-CSRF-Token": requester_signup.get_json()["csrf_token"]},
+            json=request_payload,
+        )
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(duplicate.get_json()["code"], "REQUEST_PENDING")
+        listed = requester.get("/api/correction-requests")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.get_json()["requests"][0]["id"], request_id)
+        self.assertEqual(listed.get_json()["requests"][0]["requestedBy"], "Correction Requester")
+        unauthorized_list = backend.app.test_client().get("/api/correction-requests")
+        self.assertEqual(unauthorized_list.status_code, 401)
+        viewer_rejection = requester.post(
+            f"/api/correction-requests/{request_id}/reject",
+            headers={"X-CSRF-Token": requester_signup.get_json()["csrf_token"]},
+            json={"reason": "The requester cannot decide this change."},
+        )
+        self.assertEqual(viewer_rejection.status_code, 403)
+
+        approval_payload = {
+            "second_approver_email": "persistent-approver-two@example.com",
+            "second_approver_password": "StrongPass123",
+        }
+        no_approval_csrf = approver_one.post(
+            f"/api/correction-requests/{request_id}/approve",
+            json=approval_payload,
+        )
+        self.assertEqual(no_approval_csrf.status_code, 403)
+        approved = approver_one.post(
+            f"/api/correction-requests/{request_id}/approve",
+            headers={"X-CSRF-Token": approver_one_signup.get_json()["csrf_token"]},
+            json=approval_payload,
+        )
+        self.assertEqual(approved.status_code, 201)
+        self.assertEqual(approved.get_json()["request"]["status"], "Approved")
+        self.assertEqual(approved.get_json()["record"]["marks"], 75)
+        self.assertEqual(approved.get_json()["record"]["approver_1"], "Persistent Approver One")
+        self.assertEqual(approved.get_json()["record"]["approver_2"], "Persistent Approver Two")
+        repeated_approval = approver_one.post(
+            f"/api/correction-requests/{request_id}/approve",
+            headers={"X-CSRF-Token": approver_one_signup.get_json()["csrf_token"]},
+            json=approval_payload,
+        )
+        self.assertEqual(repeated_approval.status_code, 409)
+        self.assertEqual(repeated_approval.get_json()["code"], "REQUEST_NOT_PENDING")
+
+        second_published = backend.app.test_client().post(
+            "/api/publish",
+            headers=self.publish_headers(),
+            json={
+                "roll_no": "PERSISTENT-COR-002",
+                "student_name": "Another Student",
+                "subject": "Chemistry",
+                "marks": 60,
+                "max_marks": 100,
+            },
+        )
+        reject_payload = {
+            "target_id": second_published.get_json()["record"]["id"],
+            "requested_marks": 65,
+            "reason": "Please review this source document.",
+        }
+        rejected_request = requester.post(
+            "/api/correction-requests",
+            headers={"X-CSRF-Token": requester_signup.get_json()["csrf_token"]},
+            json=reject_payload,
+        )
+        rejection_id = rejected_request.get_json()["request"]["id"]
+        rejected = approver_one.post(
+            f"/api/correction-requests/{rejection_id}/reject",
+            headers={"X-CSRF-Token": approver_one_signup.get_json()["csrf_token"]},
+            json={"reason": "The source record does not support this change."},
+        )
+        self.assertEqual(rejected.status_code, 200)
+        self.assertEqual(rejected.get_json()["request"]["status"], "Rejected")
+        self.assertEqual(
+            rejected.get_json()["request"]["rejectionReason"],
+            "The source record does not support this change.",
+        )
+        repeated_rejection = approver_one.post(
+            f"/api/correction-requests/{rejection_id}/reject",
+            headers={"X-CSRF-Token": approver_one_signup.get_json()["csrf_token"]},
+            json={"reason": "The source record does not support this change."},
+        )
+        self.assertEqual(repeated_rejection.status_code, 409)
+
+    def test_atomic_correction_approval_rejects_stale_request(self):
+        requester = self.client
+        signup = requester.post("/api/auth/signup", json={
+            "name": "Stale Requester",
+            "email": "stale-requester@example.com",
+            "password": "StrongPass123",
+        })
+        approver_one = backend.db.create_user(
+            "Stale Approver One", "stale-approver-one@example.com",
+            "unused-password-hash", "approver",
+        )
+        approver_two = backend.db.create_user(
+            "Stale Approver Two", "stale-approver-two@example.com",
+            "unused-password-hash", "approver",
+        )
+        published = backend.app.test_client().post(
+            "/api/publish",
+            headers=self.publish_headers(),
+            json={
+                "roll_no": "STALE-COR-001",
+                "student_name": "Stale Student",
+                "subject": "History",
+                "marks": 50,
+                "max_marks": 100,
+            },
+        )
+        target_id = published.get_json()["record"]["id"]
+        submitted = requester.post(
+            "/api/correction-requests",
+            headers={"X-CSRF-Token": signup.get_json()["csrf_token"]},
+            json={
+                "target_id": target_id,
+                "requested_marks": 55,
+                "reason": "The original answer sheet confirms these marks.",
+            },
+        )
+        request_id = submitted.get_json()["request"]["id"]
+
+        concurrent_correction = {
+            "entry_type": "CORRECTION",
+            "roll_no": "STALE-COR-001",
+            "student_name": "Stale Student",
+            "subject": "History",
+            "marks": 52,
+            "max_marks": 100,
+            "exam_session": "",
+            "target_id": target_id,
+            "supersedes_id": target_id,
+            "reason": "An independent correction was appended first.",
+            "approver_1": "Stale Approver One",
+            "approver_2": "Stale Approver Two",
+            "created_at": "2025-01-01T00:00:00Z",
+        }
+        backend.db.append_entry(dict(concurrent_correction))
+        stale_entry = dict(concurrent_correction, marks=55)
+        with self.assertRaises(sqlite3.IntegrityError) as error:
+            backend.db.append_entry(
+                stale_entry,
+                correction_request_id=request_id,
+                approver_user_ids=(approver_one["id"], approver_two["id"]),
+            )
+        self.assertIn("STALE_CORRECTION_REQUEST", str(error.exception))
+        self.assertEqual(backend.db.fetch_correction_request(request_id)["status"], "Pending")
 
     def test_login_rejects_wrong_password(self):
         self.client.post("/api/auth/signup", json={

@@ -57,9 +57,9 @@ Web Crypto requires a secure context; use HTTPS or localhost rather than opening
 
 The ledger starts empty. Add a student or publish a result to create records. A published result includes its record ID, roll number, name, exam, subject, marks, optional metadata, timestamp, `prevHash`, and SHA-256 `hash`. The first record links to the all-zero genesis hash. If stored fields or links change, verification reports the first affected block.
 
-Records, correction requests, audit entries, and settings are saved per browser profile. A QR payload identifies a record but does not contain a server-verifiable signature; another browser can verify it only if it has the same local ledger data.
+Records, audit entries, and settings are saved per browser profile. Correction requests and their decisions are stored on the server and are shared across signed-in accounts. A QR payload identifies a record but does not contain a server-verifiable signature; another browser can verify it only if it has the same local ledger data.
 
-The login and signup flows use the Flask backend. New accounts default to viewer access. Set `VERIGRADE_ADMIN_EMAIL` to the email address of the trusted initial administrator; that account is promoted on sign-in and can assign roles from **Settings → Account access**. Correction requests are saved per browser; approval appends the corrected result to the shared server ledger after two distinct approvers authenticate. Rejection is not yet available.
+The login and signup flows use the Flask backend. New accounts default to viewer access. Set `VERIGRADE_ADMIN_EMAIL` to the email address of the trusted initial administrator; that account is promoted on sign-in and can assign roles from **Settings → Account access**. A signed-in user can submit a correction request for the current result. An approver can reject it with a reason or approve it after a second, distinct approver authenticates; approved corrections append to the shared server ledger. Existing browser-only correction requests are not migrated automatically.
 
 Run the ledger tests with `node --test tests/ledger.test.js`.
 

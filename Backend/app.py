@@ -722,6 +722,276 @@ def get_record(entry_id: int):
     ))
 
 
+def describe_correction_request(item: dict) -> dict:
+    rejected = item["status"] == "Rejected"
+    return {
+        "id": item["id"],
+        "recordId": str(item["target_id"]),
+        "rollNo": item["roll_no"],
+        "subject": item["subject"],
+        "original": item["original_marks"],
+        "requested": item["requested_marks"],
+        "reason": item["reason"],
+        "status": item["status"],
+        "first": "Rejected" if rejected else ("Approved" if item["approver_1_user_id"] else "Pending"),
+        "second": "Approved" if item["approver_2_user_id"] else "Pending",
+        "firstName": item["rejected_by_name"] if rejected else item["approver_1_name"],
+        "secondName": item["approver_2_name"],
+        "requestedBy": item["requested_by_name"],
+        "requestedAt": item["created_at"],
+        "date": item["decided_at"] or "",
+        "rejectionReason": item["rejection_reason"] or "",
+    }
+
+
+@app.get("/api/correction-requests")
+def list_correction_requests():
+    if not authenticated_session_user():
+        return api_error("Sign-in is required.", "UNAUTHENTICATED", 401)
+    return api_ok({
+        "requests": [
+            describe_correction_request(item)
+            for item in db.list_correction_requests()
+        ]
+    })
+
+
+@app.post("/api/correction-requests")
+def submit_correction_request():
+    user = authenticated_session_user()
+    if not user:
+        return api_error("Sign-in is required.", "UNAUTHENTICATED", 401)
+    csrf_error = require_csrf()
+    if csrf_error:
+        return csrf_error
+
+    body, body_error = read_json_body()
+    if body_error:
+        return api_error(body_error, "MALFORMED_JSON", 400)
+    if not isinstance(body, dict):
+        return api_error("Request body must be a JSON object.", "VALIDATION_ERROR", 400)
+    try:
+        target_id = int(str(body.get("target_id", "")).strip())
+    except (TypeError, ValueError):
+        return api_error("'target_id' must be a whole number.", "VALIDATION_ERROR", 400)
+    if target_id < 1:
+        return api_error("'target_id' must be 1 or greater.", "VALIDATION_ERROR", 400)
+
+    requested_marks, marks_problem = clean_marks(
+        body.get("requested_marks"), "requested_marks"
+    )
+    if marks_problem:
+        return api_error(marks_problem, "VALIDATION_ERROR", 400)
+    reason, reason_problem = clean_text(body.get("reason"), "reason", 300)
+    if reason_problem:
+        return api_error(reason_problem, "VALIDATION_ERROR", 400)
+    if len(reason) < 10:
+        return api_error(
+            "The correction reason must be at least 10 characters.",
+            "VALIDATION_ERROR",
+            400,
+        )
+
+    items = ledger.audit_chain(db.fetch_all_entries())["entries"]
+    target = ledger._find_entry(items, target_id)
+    if target is None:
+        return api_error("The result to correct was not found.", "NOT_FOUND", 404)
+    root = target
+    if target.get("entry_type") == "CORRECTION":
+        root = ledger._find_entry(items, target.get("target_id"))
+        if root is None:
+            return api_error("The target correction has no original result.", "BROKEN_TARGET", 409)
+    group = ledger.group_for(items, root)
+    effective = group["effective"]
+    if ledger._as_int(effective.get("id")) != target_id:
+        return api_error(
+            "This result has changed. Refresh the ledger before requesting a correction.",
+            "STALE_RECORD",
+            409,
+        )
+    original_marks, marks_problem = clean_marks(effective.get("marks"), "current_marks")
+    if marks_problem:
+        return api_error("The current result is not valid for correction.", "CORRUPTED_RECORD", 409)
+    if original_marks == requested_marks:
+        return api_error("Requested marks must differ from the current marks.", "NO_CHANGE", 400)
+
+    request_id = "COR-" + secrets.token_hex(12)
+    try:
+        request_item = db.create_correction_request(
+            request_id=request_id,
+            target_id=target_id,
+            original_marks=original_marks,
+            requested_marks=requested_marks,
+            reason=reason,
+            requester_user_id=user["id"],
+            created_at=ledger.utc_now_iso(),
+        )
+    except sqlite3.IntegrityError as exc:
+        if "correction_requests.target_id" in str(exc):
+            return api_error(
+                "A pending correction request already exists for this result.",
+                "REQUEST_PENDING",
+                409,
+            )
+        return api_error("The correction request could not be saved.", "INSERT_FAILED", 409)
+    return api_ok({"request": describe_correction_request(request_item)}, 201)
+
+
+@app.post("/api/correction-requests/<request_id>/approve")
+def approve_correction_request(request_id: str):
+    user = authenticated_session_user()
+    if not user:
+        return api_error("Sign-in is required.", "UNAUTHENTICATED", 401)
+    if user["role"] not in ("approver", "admin"):
+        return api_error("An approver role is required.", "FORBIDDEN", 403)
+    csrf_error = require_csrf()
+    if csrf_error:
+        return csrf_error
+
+    body, body_error = read_json_body()
+    if body_error:
+        return api_error(body_error, "MALFORMED_JSON", 400)
+    if not isinstance(body, dict):
+        return api_error("Request body must be a JSON object.", "VALIDATION_ERROR", 400)
+    second_email, email_problem = clean_text(
+        body.get("second_approver_email"), "second_approver_email", 120
+    )
+    second_password = body.get("second_approver_password")
+    if email_problem or not isinstance(second_password, str) or not second_password:
+        return api_error(
+            "A second approver's email and password are required.",
+            "VALIDATION_ERROR",
+            400,
+        )
+    second_user = db.find_user_by_email(second_email)
+    if not second_user or not check_password_hash(second_user["password_hash"], second_password):
+        return api_error("Invalid second approver credentials.", "UNAUTHENTICATED", 401)
+    second_user = promote_configured_admin(second_user)
+    if second_user["role"] not in ("approver", "admin"):
+        return api_error("The second account does not have an approver role.", "FORBIDDEN", 403)
+    if second_user["id"] == user["id"]:
+        return api_error(
+            "Two different approver accounts are required.",
+            "APPROVERS_NOT_DISTINCT",
+            400,
+        )
+
+    request_item = db.fetch_correction_request(request_id)
+    if not request_item:
+        return api_error("Correction request not found.", "NOT_FOUND", 404)
+    if request_item["status"] != "Pending":
+        return api_error("This correction request is no longer pending.", "REQUEST_NOT_PENDING", 409)
+
+    audit = ledger.audit_chain(db.fetch_all_entries())
+    items = audit["entries"]
+    target = ledger._find_entry(items, request_item["target_id"])
+    if target is None:
+        return api_error("The result to correct no longer exists.", "NOT_FOUND", 404)
+    root = target
+    if target.get("entry_type") == "CORRECTION":
+        root = ledger._find_entry(items, target.get("target_id"))
+        if root is None:
+            return api_error("The target correction has no original result.", "BROKEN_TARGET", 409)
+    group = ledger.group_for(items, root)
+    publisher = group["publish"]
+    effective = group["effective"]
+    if ledger._as_int(effective.get("id")) != request_item["target_id"]:
+        return api_error(
+            "This request is stale because the result has already changed.",
+            "STALE_REQUEST",
+            409,
+        )
+    current_marks, marks_problem = clean_marks(effective.get("marks"), "current_marks")
+    if marks_problem or current_marks != request_item["original_marks"]:
+        return api_error("The current marks no longer match this request.", "STALE_REQUEST", 409)
+
+    entry = {
+        "entry_type": "CORRECTION",
+        "roll_no": publisher.get("roll_no"),
+        "student_name": publisher.get("student_name"),
+        "subject": publisher.get("subject"),
+        "marks": request_item["requested_marks"],
+        "max_marks": ledger._as_int(publisher.get("max_marks")) or 100,
+        "exam_session": publisher.get("exam_session"),
+        "target_id": ledger._as_int(publisher.get("id")),
+        "supersedes_id": ledger._as_int(effective.get("id")),
+        "reason": request_item["reason"],
+        "approver_1": user["name"],
+        "approver_2": second_user["name"],
+        "created_at": ledger.utc_now_iso(),
+    }
+    try:
+        entry_id = db.append_entry(
+            entry,
+            correction_request_id=request_id,
+            approver_user_ids=(user["id"], second_user["id"]),
+        )
+    except sqlite3.IntegrityError as exc:
+        message = str(exc)
+        if "CORRECTION_REQUEST_NOT_PENDING" in message:
+            return api_error("This correction request is no longer pending.", "REQUEST_NOT_PENDING", 409)
+        if "STALE_CORRECTION_REQUEST" in message:
+            return api_error(
+                "This request is stale because the result has already changed.",
+                "STALE_REQUEST",
+                409,
+            )
+        if "APPROVERS_NOT_DISTINCT" in message:
+            return api_error("Two different approver accounts are required.", "APPROVERS_NOT_DISTINCT", 400)
+        return api_error("The correction could not be appended to the ledger.", "INSERT_FAILED", 409)
+
+    entry["id"] = entry_id
+    updated_request = db.fetch_correction_request(request_id)
+    response = {
+        "message": f"Correction #{entry_id} appended for request {request_id}.",
+        "record": ledger.describe_entry(entry),
+        "request": describe_correction_request(updated_request),
+        "qr_payload": ledger.build_qr_payload(entry),
+    }
+    if not audit["summary"]["chain_intact"]:
+        response["chain_warning"] = "The ledger was already inconsistent before this correction."
+    return api_ok(response, 201)
+
+
+@app.post("/api/correction-requests/<request_id>/reject")
+def reject_correction_request(request_id: str):
+    user = authenticated_session_user()
+    if not user:
+        return api_error("Sign-in is required.", "UNAUTHENTICATED", 401)
+    if user["role"] not in ("approver", "admin"):
+        return api_error("An approver role is required.", "FORBIDDEN", 403)
+    csrf_error = require_csrf()
+    if csrf_error:
+        return csrf_error
+
+    body, body_error = read_json_body()
+    if body_error:
+        return api_error(body_error, "MALFORMED_JSON", 400)
+    if not isinstance(body, dict):
+        return api_error("Request body must be a JSON object.", "VALIDATION_ERROR", 400)
+    reason, reason_problem = clean_text(body.get("reason"), "reason", 300)
+    if reason_problem:
+        return api_error(reason_problem, "VALIDATION_ERROR", 400)
+    if len(reason) < 10:
+        return api_error(
+            "The rejection reason must be at least 10 characters.",
+            "VALIDATION_ERROR",
+            400,
+        )
+    request_item = db.reject_correction_request(
+        request_id,
+        user["id"],
+        reason,
+        ledger.utc_now_iso(),
+    )
+    if not request_item:
+        existing = db.fetch_correction_request(request_id)
+        if not existing:
+            return api_error("Correction request not found.", "NOT_FOUND", 404)
+        return api_error("This correction request is no longer pending.", "REQUEST_NOT_PENDING", 409)
+    return api_ok({"request": describe_correction_request(request_item)})
+
+
 # --------------------------------------------------------------------------
 # API: corrections (2-admin, append-only)
 # --------------------------------------------------------------------------

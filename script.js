@@ -31,6 +31,8 @@
   let authMode = "login";
   let currentUser = null;
   let csrfToken = "";
+  let correctionRequests = [];
+  let correctionLoadError = "";
 
   function clearLegacyApiKeys() {
     sessionStorage.removeItem("verigrade.publishApiKey");
@@ -357,6 +359,7 @@
       return part.charAt(0);
     }).join("").slice(0, 2).toUpperCase();
     showView("overview");
+    loadCorrectionRequests();
   }
 
   async function signOut() {
@@ -374,6 +377,8 @@
       }
       currentUser = null;
       csrfToken = "";
+      correctionRequests = [];
+      correctionLoadError = "";
       clearLegacyApiKeys();
       $("authForm").reset();
       $("appShell").hidden = true;
@@ -456,7 +461,7 @@
     const alerts = integrityReport.entries.filter(function (entry) {
       return entry.status === Ledger.STATUS.TAMPERED || entry.status === Ledger.STATUS.CORRUPTED;
     }).length;
-    const pending = state.corrections.filter(function (item) {
+    const pending = correctionRequests.filter(function (item) {
       return item && item.status === "Pending";
     }).length;
     const cards = [
@@ -501,7 +506,7 @@
         esc(safeText(entry.record)) + "<br><small>" + esc(safeText(entry.user)) + ", " +
         esc(safeText(entry.time)) + "</small></div></li>";
     }).join("") : '<li class="empty"><p>No activity recorded yet.</p></li>';
-    const pending = state.corrections.filter(function (item) { return item && item.status === "Pending"; });
+    const pending = correctionRequests.filter(function (item) { return item && item.status === "Pending"; });
     $("pendingList").innerHTML = pending.length ? pending.map(function (item) {
       return '<div class="pending-item"><span>' + esc(studentName(item.rollNo)) + " · " +
         esc(item.original) + " → " + esc(item.requested) +
@@ -1039,10 +1044,16 @@
   }
 
   function renderCorrections() {
-    const items = state.corrections.filter(function (item) { return item && typeof item === "object"; });
+    const items = correctionRequests;
     const canApprove = currentUser &&
       (currentUser.role === "approver" || currentUser.role === "admin");
-    $("correctionList").innerHTML = items.length ? items.map(function (item) {
+    const legacyNotice = state.corrections.length
+      ? '<p class="notice">Older browser-only correction requests are not on the server and were not migrated.</p>'
+      : "";
+    const errorNotice = correctionLoadError
+      ? '<p class="notice">Could not load server requests: ' + esc(correctionLoadError) + "</p>"
+      : "";
+    const requestCards = items.map(function (item) {
       const open = item.status === "Pending";
       return '<div class="card"><div class="corr-top"><div><strong>' + esc(studentName(item.rollNo)) +
         "</strong> <small>" + esc(safeText(item.rollNo)) + " · " + esc(safeText(item.subject)) +
@@ -1053,19 +1064,27 @@
           (item.firstName ? " " + esc(item.firstName) : "") +
         '</div><div><small>Second approver</small>' + badge(item.second) +
           (item.secondName ? " " + esc(item.secondName) : "") +
-        '</div><div><small>Approval date</small>' + esc(safeText(item.date)) + "</div></div>" +
+        '</div><div><small>Requested by</small>' + esc(safeText(item.requestedBy)) +
+        '</div><div><small>Requested at</small>' + esc(safeText(item.requestedAt)) +
+        '</div><div><small>Decision date</small>' + esc(safeText(item.date)) + "</div></div>" +
         '<p class="muted">Reason: ' + esc(safeText(item.reason)) + '</p>' +
-        (open ? '<p class="notice">Approval requires a second approver to re-authenticate. Rejection is not available yet.</p>' : "") +
+        (item.rejectionReason ? '<p class="muted">Rejection reason: ' + esc(item.rejectionReason) + "</p>" : "") +
+        (open ? '<p class="notice">Approval requires two distinct approvers. Rejection is recorded on the server.</p>' : "") +
         '<div class="actions">' +
         '<button class="btn sm primary" data-approve="' + esc(item.id) + '"' +
           (!open || !canApprove ? " disabled" : "") + '>Approve</button>' +
-        '<button class="btn sm danger" disabled title="Server-backed rejection flow is not available yet">Reject</button>' +
+        '<button class="btn sm danger" data-reject="' + esc(item.id) + '"' +
+          (!open || !canApprove ? " disabled" : "") + '>Reject</button>' +
         '<button class="btn sm" data-request="' + esc(item.id) + '">View request</button></div></div>';
-    }).join("") : '<div class="card empty"><p>No correction requests. Request one from a verified result record.</p></div>';
+    }).join("");
+    const emptyState = items.length || correctionLoadError
+      ? ""
+      : '<div class="card empty"><p>No server correction requests. Request one from a verified result record.</p></div>';
+    $("correctionList").innerHTML = legacyNotice + errorNotice + requestCards + emptyState;
   }
 
   function findCorrection(id) {
-    return state.corrections.find(function (item) { return item && item.id === id; });
+    return correctionRequests.find(function (item) { return item && item.id === id; });
   }
 
   function viewRequest(id) {
@@ -1079,9 +1098,12 @@
       ["Subject", esc(correction.subject)],
       ["Marks change", esc(correction.original) + " → " + esc(correction.requested)],
       ["Reason", esc(correction.reason)],
+      ["Requested by", esc(safeText(correction.requestedBy))],
+      ["Requested at", esc(safeText(correction.requestedAt))],
       ["First approval", badge(correction.first)],
       ["Second approval", badge(correction.second)],
-      ["Status", badge(correction.status)]
+      ["Status", badge(correction.status)],
+      ["Rejection reason", esc(safeText(correction.rejectionReason))]
     ]), [{ label: "Close" }]);
   }
 
@@ -1113,7 +1135,6 @@
   }
 
   async function approveCorrection(id) {
-    const correction = findCorrection(id);
     const email = $("cSecondEmail").value.trim();
     const password = $("cSecondPassword").value;
     if (!email || !password) {
@@ -1121,7 +1142,8 @@
       return false;
     }
     try {
-      const response = await fetch(API_BASE + "/api/corrections", {
+      const response = await fetch(API_BASE + "/api/correction-requests/" +
+        encodeURIComponent(id) + "/approve", {
         method: "POST",
         credentials: "include",
         headers: {
@@ -1129,9 +1151,6 @@
           "X-CSRF-Token": csrfToken
         },
         body: JSON.stringify({
-          target_id: correction.recordId,
-          new_marks: correction.requested,
-          reason: correction.reason,
           second_approver_email: email,
           second_approver_password: password
         })
@@ -1141,41 +1160,16 @@
         $("cErr").textContent = result.error || "The server could not approve this correction.";
         return false;
       }
-      if (!result.record || !result.record.approver_1 || !result.record.approver_2) {
-        $("cErr").textContent = "The server response did not include both approvers; verify the ledger before retrying.";
+      if (!result.record || !result.request) {
+        $("cErr").textContent = "The server response was incomplete. Refresh the ledger before retrying.";
         return false;
       }
-      let localSaveError = "";
-      try {
-        commitState(function (draft) {
-          const item = draft.corrections.find(function (entry) { return entry.id === id; });
-          if (!item) return;
-          item.status = "Approved";
-          item.first = "Approved";
-          item.second = "Approved";
-          item.firstName = result.record.approver_1;
-          item.secondName = result.record.approver_2;
-          item.date = result.record.created_at || new Date().toISOString();
-          appendAudit(draft, "Correction approved and appended to server ledger", item.recordId, "Success", currentUser.name);
-        });
-      } catch (error) {
-        localSaveError = error.message || "Browser storage is unavailable.";
-        const item = findCorrection(id);
-        if (item) {
-          item.status = "Approved";
-          item.first = "Approved";
-          item.second = "Approved";
-          item.firstName = result.record.approver_1;
-          item.secondName = result.record.approver_2;
-          item.date = result.record.created_at || new Date().toISOString();
-        }
-      }
       const synced = await syncServerLedger();
-      await renderAll();
-      if (localSaveError) {
-        toast("Server correction succeeded, but this browser could not save its request status: " + localSaveError, "warn");
-      } else if (!synced) {
+      const requestsLoaded = await loadCorrectionRequests();
+      if (!synced) {
         toast("Correction was appended to the server, but the browser could not refresh the ledger.", "warn");
+      } else if (!requestsLoaded) {
+        toast("Correction was approved, but the request list could not be refreshed.", "warn");
       } else {
         toast("Correction approved by two accounts and appended to the server ledger.", "ok");
       }
@@ -1185,6 +1179,87 @@
       return false;
     } finally {
       $("cSecondPassword").value = "";
+    }
+  }
+
+  function confirmRejection(id) {
+    const correction = findCorrection(id);
+    if (!correction || correction.status !== "Pending") {
+      toast("This correction request is no longer pending.", "warn");
+      return;
+    }
+    if (!currentUser || (currentUser.role !== "approver" && currentUser.role !== "admin")) {
+      toast("An approver account is required to review correction requests.", "warn");
+      return;
+    }
+    const body = "<p>Reject the correction request for <strong>" +
+      esc(studentName(correction.rollNo)) + "</strong> from " + esc(correction.original) +
+      " to " + esc(correction.requested) + "?</p>" +
+      '<div class="field"><label for="cRejectReason">Rejection reason</label><textarea id="cRejectReason" rows="3" maxlength="300" required></textarea></div>' +
+      '<span id="cErr" class="err" aria-live="polite"></span>';
+    openModal("Reject correction request", body, [
+      { label: "Cancel" },
+      {
+        label: "Reject request",
+        cls: "danger",
+        onClick: function () { return rejectCorrection(id); }
+      }
+    ]);
+  }
+
+  async function rejectCorrection(id) {
+    const reason = $("cRejectReason").value.trim();
+    if (reason.length < 10) {
+      $("cErr").textContent = "Enter a rejection reason of at least 10 characters.";
+      return false;
+    }
+    try {
+      const response = await fetch(API_BASE + "/api/correction-requests/" +
+        encodeURIComponent(id) + "/reject", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken
+        },
+        body: JSON.stringify({ reason: reason })
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) {
+        $("cErr").textContent = result.error || "The server could not reject this correction.";
+        return false;
+      }
+      const loaded = await loadCorrectionRequests();
+      if (loaded) toast("Correction request rejected and recorded on the server.", "warn");
+      return true;
+    } catch (error) {
+      $("cErr").textContent = error.message || "The correction could not be rejected.";
+      return false;
+    }
+  }
+
+  async function loadCorrectionRequests(silent) {
+    try {
+      const response = await fetch(API_BASE + "/api/correction-requests", {
+        credentials: "include",
+        cache: "no-store"
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok || !Array.isArray(result.requests)) {
+        throw new Error(result.error || "Could not load server correction requests.");
+      }
+      if (!currentUser) return false;
+      correctionRequests = result.requests;
+      correctionLoadError = "";
+      await renderAll();
+      return true;
+    } catch (error) {
+      const message = error.message || "Could not load server correction requests.";
+      const shouldNotify = !silent || correctionLoadError !== message;
+      correctionLoadError = message;
+      renderCorrections();
+      if (shouldNotify) toast("Correction requests could not be loaded: " + correctionLoadError, "bad");
+      return false;
     }
   }
 
@@ -1199,15 +1274,15 @@
       toast("A correction requires a numeric maximum-mark value.", "bad");
       return;
     }
-    if (state.corrections.some(function (item) {
-      return item && item.recordId === recordId && item.status === "Pending";
+    if (correctionRequests.some(function (item) {
+      return item && item.recordId === String(recordId) && item.status === "Pending";
     })) {
       toast("This record already has a pending correction request.", "warn");
       return;
     }
     const body = '<p>Current marks: <strong>' + esc(record.marks) + "</strong> / " + esc(record.max) + "</p>" +
       '<div class="field"><label for="cRequested">Requested marks</label><input id="cRequested" type="number" min="0" max="' +
-      esc(record.max) + '" step="any"></div><div class="field"><label for="cReason">Reason</label><textarea id="cReason" rows="3" maxlength="1000"></textarea></div>' +
+      esc(record.max) + '" step="1"></div><div class="field"><label for="cReason">Reason</label><textarea id="cReason" rows="3" minlength="10" maxlength="300" required></textarea></div>' +
       '<span id="cErr" class="err" aria-live="polite"></span>';
     openModal("Request a correction", body, [
       { label: "Cancel" },
@@ -1215,10 +1290,10 @@
     ]);
   }
 
-  function saveCorrectionRequest(record) {
+  async function saveCorrectionRequest(record) {
     const requested = Number($("cRequested").value);
     const reason = $("cReason").value.trim();
-    if ($("cRequested").value === "" || !Number.isFinite(requested) || requested < 0 || requested > record.max) {
+    if ($("cRequested").value === "" || !Number.isInteger(requested) || requested < 0 || requested > record.max) {
       $("cErr").textContent = "Enter a valid mark within the record's maximum.";
       return false;
     }
@@ -1226,30 +1301,38 @@
       $("cErr").textContent = "Requested marks must differ from the current marks.";
       return false;
     }
-    if (!reason) {
-      $("cErr").textContent = "A reason is required.";
+    if (reason.length < 10) {
+      $("cErr").textContent = "Enter a reason of at least 10 characters.";
       return false;
     }
-    const correction = {
-      id: "COR-" + newRecordId().slice(3),
-      recordId: record.id,
-      rollNo: record.rollNo,
-      subject: record.subject,
-      original: record.marks,
-      requested: requested,
-      reason: reason,
-      first: "Pending",
-      second: "Pending",
-      date: "",
-      status: "Pending"
-    };
+    const targetId = Number(record.id);
+    if (!Number.isSafeInteger(targetId) || targetId < 1) {
+      $("cErr").textContent = "This result does not have a valid server record ID.";
+      return false;
+    }
     try {
-      commitState(function (draft) {
-        draft.corrections.unshift(correction);
-        appendAudit(draft, "Correction requested", record.id, "Success");
+      const response = await fetch(API_BASE + "/api/correction-requests", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken
+        },
+        body: JSON.stringify({
+          target_id: targetId,
+          requested_marks: requested,
+          reason: reason
+        })
       });
-      renderAll();
-      toast("Correction request saved in this browser. Approval requires two approver accounts.", "ok");
+      const result = await response.json();
+      if (!response.ok || !result.ok || !result.request) {
+        $("cErr").textContent = result.error || "The server could not save this correction request.";
+        return false;
+      }
+      const loaded = await loadCorrectionRequests();
+      if (loaded) toast("Correction request saved to the shared server.", "ok");
+      else toast("Correction request was saved, but the list could not be refreshed.", "warn");
+      return true;
     } catch (error) {
       $("cErr").textContent = error.message;
       return false;
@@ -1296,7 +1379,7 @@
     renderCorrections();
     renderAudit();
     const hasIssues = integrityReport.entries.some(function (entry) { return entry.status !== Ledger.STATUS.VERIFIED; });
-    const hasPending = state.corrections.some(function (item) { return item && item.status === "Pending"; });
+    const hasPending = correctionRequests.some(function (item) { return item && item.status === "Pending"; });
     $("bellBtn").querySelector(".dot").hidden =
       !(state.settings.notifyIntegrity && hasIssues) && !(state.settings.notifyCorrections && hasPending);
     refreshIcons();
@@ -1470,7 +1553,7 @@
     const integrityIssues = integrityReport.entries.filter(function (entry) {
       return entry.status !== Ledger.STATUS.VERIFIED;
     });
-    const pending = state.corrections.filter(function (item) { return item && item.status === "Pending"; });
+    const pending = correctionRequests.filter(function (item) { return item && item.status === "Pending"; });
     const notices = [];
     if (state.settings.notifyIntegrity && integrityIssues.length) {
       notices.push(integrityIssues.length + " ledger record(s) need integrity review.");
@@ -1538,7 +1621,7 @@
       if (button) showView(button.dataset.view);
     });
     document.addEventListener("click", function (event) {
-      const target = event.target.closest("[data-go],[data-student],[data-view-result],[data-download],[data-qr],[data-request],[data-approve],[data-save-role]");
+      const target = event.target.closest("[data-go],[data-student],[data-view-result],[data-download],[data-qr],[data-request],[data-approve],[data-reject],[data-save-role]");
       if (!target) return;
       if (target.dataset.go) showView(target.dataset.go);
       else if (target.dataset.student) showStudent(target.dataset.student);
@@ -1547,6 +1630,7 @@
       else if (target.dataset.qr) showQrForRecord(target.dataset.qr);
       else if (target.dataset.request) viewRequest(target.dataset.request);
       else if (target.dataset.approve) confirmDecision(target.dataset.approve);
+      else if (target.dataset.reject) confirmRejection(target.dataset.reject);
       else if (target.dataset.saveRole) saveUserRole(target.dataset.saveRole);
     });
     $("menuBtn").addEventListener("click", openMenu);
@@ -1607,5 +1691,6 @@
     syncServerLedger().then(function () {
       renderAll();
     });
+    if (currentUser) loadCorrectionRequests(true);
   }, 15000);
 }());

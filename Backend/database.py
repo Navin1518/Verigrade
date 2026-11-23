@@ -98,6 +98,30 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL DEFAULT 'viewer',
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS correction_requests (
+    id TEXT PRIMARY KEY,
+    target_id INTEGER NOT NULL REFERENCES ledger(id),
+    original_marks INTEGER NOT NULL,
+    requested_marks INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    requester_user_id INTEGER NOT NULL REFERENCES users(id),
+    status TEXT NOT NULL DEFAULT 'Pending'
+        CHECK (status IN ('Pending', 'Approved', 'Rejected')),
+    approver_1_user_id INTEGER REFERENCES users(id),
+    approver_2_user_id INTEGER REFERENCES users(id),
+    rejected_by_user_id INTEGER REFERENCES users(id),
+    correction_entry_id INTEGER REFERENCES ledger(id),
+    rejection_reason TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_correction_requests_status_created
+    ON correction_requests (status, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_correction_requests_pending_target
+    ON correction_requests (target_id) WHERE status = 'Pending';
 """
 
 
@@ -203,7 +227,13 @@ def insert_entry(entry: Dict[str, Any]) -> int:
     return int(new_id)
 
 
-def append_entry(entry: Dict[str, Any], duplicate_key: Optional[tuple[str, str, str]] = None) -> int:
+def append_entry(
+    entry: Dict[str, Any],
+    duplicate_key: Optional[tuple[str, str, str]] = None,
+    *,
+    correction_request_id: Optional[str] = None,
+    approver_user_ids: Optional[tuple[int, int]] = None,
+) -> int:
     """Atomically choose a tip and append one ledger entry with a write lock."""
     try:
         from .ledger import prepare_entry
@@ -215,6 +245,37 @@ def append_entry(entry: Dict[str, Any], duplicate_key: Optional[tuple[str, str, 
 
     with get_connection() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        correction_request = None
+        if correction_request_id:
+            correction_request = conn.execute(
+                "SELECT target_id, status FROM correction_requests WHERE id = ?",
+                (correction_request_id,),
+            ).fetchone()
+            if not correction_request or correction_request["status"] != "Pending":
+                raise sqlite3.IntegrityError("CORRECTION_REQUEST_NOT_PENDING")
+            requested_target_id = int(correction_request["target_id"])
+            if requested_target_id != int(entry.get("supersedes_id") or 0):
+                raise sqlite3.IntegrityError("STALE_CORRECTION_REQUEST")
+            target = conn.execute(
+                "SELECT entry_type, target_id FROM ledger WHERE id = ?",
+                (requested_target_id,),
+            ).fetchone()
+            if not target:
+                raise sqlite3.IntegrityError("STALE_CORRECTION_REQUEST")
+            publish_id = (
+                int(target["target_id"])
+                if target["entry_type"] == "CORRECTION"
+                else requested_target_id
+            )
+            latest_correction = conn.execute(
+                "SELECT id FROM ledger "
+                "WHERE entry_type = 'CORRECTION' AND target_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (publish_id,),
+            ).fetchone()
+            current_id = int(latest_correction["id"]) if latest_correction else publish_id
+            if current_id != requested_target_id:
+                raise sqlite3.IntegrityError("STALE_CORRECTION_REQUEST")
         if duplicate_key is not None:
             roll_no, subject, exam_session = duplicate_key
             existing = conn.execute(
@@ -243,6 +304,24 @@ def append_entry(entry: Dict[str, Any], duplicate_key: Optional[tuple[str, str, 
             [prepared.get(column) for column in COLUMNS],
         )
         new_id = int(cursor.lastrowid)
+        if correction_request_id:
+            if not approver_user_ids or len(approver_user_ids) != 2 or approver_user_ids[0] == approver_user_ids[1]:
+                raise sqlite3.IntegrityError("APPROVERS_NOT_DISTINCT")
+            updated = conn.execute(
+                "UPDATE correction_requests SET status = 'Approved', "
+                "approver_1_user_id = ?, approver_2_user_id = ?, "
+                "correction_entry_id = ?, decided_at = ? "
+                "WHERE id = ? AND status = 'Pending'",
+                (
+                    approver_user_ids[0],
+                    approver_user_ids[1],
+                    new_id,
+                    entry.get("created_at"),
+                    correction_request_id,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise sqlite3.IntegrityError("CORRECTION_REQUEST_NOT_PENDING")
         prepared["id"] = new_id
         entry.clear()
         entry.update(prepared)
@@ -341,3 +420,89 @@ def create_user(name: str, email: str, password_hash: str, role: str = "viewer")
         )
         user_id = int(cursor.lastrowid)
     return {"id": user_id, "name": name.strip(), "email": email.strip().lower(), "role": role}
+
+
+CORRECTION_REQUEST_SELECT = """
+SELECT cr.*,
+       requester.name AS requested_by_name,
+       first_approver.name AS approver_1_name,
+       second_approver.name AS approver_2_name,
+       rejector.name AS rejected_by_name,
+       target.roll_no AS roll_no,
+       target.subject AS subject
+FROM correction_requests cr
+JOIN users requester ON requester.id = cr.requester_user_id
+JOIN ledger target ON target.id = cr.target_id
+LEFT JOIN users first_approver ON first_approver.id = cr.approver_1_user_id
+LEFT JOIN users second_approver ON second_approver.id = cr.approver_2_user_id
+LEFT JOIN users rejector ON rejector.id = cr.rejected_by_user_id
+"""
+
+
+def create_correction_request(
+    request_id: str,
+    target_id: int,
+    original_marks: int,
+    requested_marks: int,
+    reason: str,
+    requester_user_id: int,
+    created_at: str,
+) -> Dict[str, Any]:
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "INSERT INTO correction_requests "
+            "(id, target_id, original_marks, requested_marks, reason, requester_user_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                request_id,
+                target_id,
+                original_marks,
+                requested_marks,
+                reason,
+                requester_user_id,
+                created_at,
+            ),
+        )
+        row = conn.execute(
+            CORRECTION_REQUEST_SELECT + " WHERE cr.id = ?", (request_id,)
+        ).fetchone()
+    return dict(row)
+
+
+def fetch_correction_request(request_id: str) -> Optional[Dict[str, Any]]:
+    with get_connection() as conn:
+        row = conn.execute(
+            CORRECTION_REQUEST_SELECT + " WHERE cr.id = ?", (request_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_correction_requests() -> List[Dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            CORRECTION_REQUEST_SELECT + " ORDER BY cr.created_at DESC, cr.id DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def reject_correction_request(
+    request_id: str,
+    approver_user_id: int,
+    reason: str,
+    decided_at: str,
+) -> Optional[Dict[str, Any]]:
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        updated = conn.execute(
+            "UPDATE correction_requests SET status = 'Rejected', "
+            "rejected_by_user_id = ?, rejection_reason = ?, decided_at = ? "
+            "WHERE id = ? AND status = 'Pending'",
+            (approver_user_id, reason, decided_at, request_id),
+        )
+        if updated.rowcount != 1:
+            return None
+        row = conn.execute(
+            CORRECTION_REQUEST_SELECT + " WHERE cr.id = ?", (request_id,)
+        ).fetchone()
+    return dict(row) if row else None

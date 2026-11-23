@@ -30,6 +30,7 @@
   let storageCanReset = false;
   let authMode = "login";
   let currentUser = null;
+  let csrfToken = "";
 
   function clearLegacyApiKeys() {
     sessionStorage.removeItem("verigrade.publishApiKey");
@@ -287,6 +288,7 @@
       toast("Your account has viewer access. A publisher role is required to publish results.", "warn");
       viewId = "overview";
     }
+    if (viewId === "settings") loadUserManagement();
     document.querySelectorAll(".view").forEach(function (view) {
       view.classList.toggle("active", view.id === viewId);
     });
@@ -305,6 +307,7 @@
       const response = await fetch(API_BASE + "/api/auth/me", { credentials: "include" });
       if (!response.ok) return null;
       const result = await response.json();
+      csrfToken = result.csrf_token || "";
       return result.user || null;
     } catch (_) {
       return null;
@@ -362,13 +365,15 @@
     try {
       const response = await fetch(API_BASE + "/api/auth/logout", {
         method: "POST",
-        credentials: "include"
+        credentials: "include",
+        headers: { "X-CSRF-Token": csrfToken }
       });
       const result = await response.json();
       if (!response.ok || !result.ok) {
         throw new Error(result.error || "Could not sign out.");
       }
       currentUser = null;
+      csrfToken = "";
       clearLegacyApiKeys();
       $("authForm").reset();
       $("appShell").hidden = true;
@@ -886,7 +891,7 @@
       const response = await fetch(API_BASE + "/api/publish", {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
         body: JSON.stringify({
           roll_no: rollNo,
           student_name: name,
@@ -1035,6 +1040,8 @@
 
   function renderCorrections() {
     const items = state.corrections.filter(function (item) { return item && typeof item === "object"; });
+    const canApprove = currentUser &&
+      (currentUser.role === "approver" || currentUser.role === "admin");
     $("correctionList").innerHTML = items.length ? items.map(function (item) {
       const open = item.status === "Pending";
       return '<div class="card"><div class="corr-top"><div><strong>' + esc(studentName(item.rollNo)) +
@@ -1043,13 +1050,16 @@
         '<div class="corr-grid"><div><small>Original marks</small>' + esc(item.original) +
         '</div><div><small>Requested marks</small>' + esc(item.requested) +
         '</div><div><small>First approver</small>' + badge(item.first) +
+          (item.firstName ? " " + esc(item.firstName) : "") +
         '</div><div><small>Second approver</small>' + badge(item.second) +
+          (item.secondName ? " " + esc(item.secondName) : "") +
         '</div><div><small>Approval date</small>' + esc(safeText(item.date)) + "</div></div>" +
         '<p class="muted">Reason: ' + esc(safeText(item.reason)) + '</p>' +
-        (open ? '<p class="notice">Approval and rejection are paused until server-backed two-approver authentication is available.</p>' : "") +
+        (open ? '<p class="notice">Approval requires a second approver to re-authenticate. Rejection is not available yet.</p>' : "") +
         '<div class="actions">' +
-        '<button class="btn sm primary" disabled title="Server-backed two-approver flow is not available yet">Approve</button>' +
-        '<button class="btn sm danger" disabled title="Server-backed two-approver flow is not available yet">Reject</button>' +
+        '<button class="btn sm primary" data-approve="' + esc(item.id) + '"' +
+          (!open || !canApprove ? " disabled" : "") + '>Approve</button>' +
+        '<button class="btn sm danger" disabled title="Server-backed rejection flow is not available yet">Reject</button>' +
         '<button class="btn sm" data-request="' + esc(item.id) + '">View request</button></div></div>';
     }).join("") : '<div class="card empty"><p>No correction requests. Request one from a verified result record.</p></div>';
   }
@@ -1073,6 +1083,109 @@
       ["Second approval", badge(correction.second)],
       ["Status", badge(correction.status)]
     ]), [{ label: "Close" }]);
+  }
+
+  function confirmDecision(id) {
+    const correction = findCorrection(id);
+    if (!correction || correction.status !== "Pending") {
+      toast("This correction request is no longer pending.", "warn");
+      return;
+    }
+    if (!currentUser || (currentUser.role !== "approver" && currentUser.role !== "admin")) {
+      toast("An approver account is required to review correction requests.", "warn");
+      return;
+    }
+    const body = "<p>Signed in as <strong>" + esc(currentUser.name) + "</strong>. A different approver must confirm with their own account.</p>" +
+      '<div class="field"><label for="cSecondEmail">Second approver email</label><input id="cSecondEmail" type="email" autocomplete="username" required></div>' +
+      '<div class="field"><label for="cSecondPassword">Second approver password</label><input id="cSecondPassword" type="password" autocomplete="current-password" required></div>' +
+      '<p class="muted"><strong>' + esc(studentName(correction.rollNo)) + "</strong> · " + esc(correction.subject) +
+      " · " + esc(correction.original) + " → " + esc(correction.requested) + "<br>" +
+      esc(correction.reason) + "</p>" +
+      '<span id="cErr" class="err" aria-live="polite"></span>';
+    openModal("Approve correction", body, [
+      { label: "Cancel" },
+      {
+        label: "Approve with two accounts",
+        cls: "primary",
+        onClick: function () { return approveCorrection(id); }
+      }
+    ]);
+  }
+
+  async function approveCorrection(id) {
+    const correction = findCorrection(id);
+    const email = $("cSecondEmail").value.trim();
+    const password = $("cSecondPassword").value;
+    if (!email || !password) {
+      $("cErr").textContent = "Enter the second approver's email and password.";
+      return false;
+    }
+    try {
+      const response = await fetch(API_BASE + "/api/corrections", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken
+        },
+        body: JSON.stringify({
+          target_id: correction.recordId,
+          new_marks: correction.requested,
+          reason: correction.reason,
+          second_approver_email: email,
+          second_approver_password: password
+        })
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) {
+        $("cErr").textContent = result.error || "The server could not approve this correction.";
+        return false;
+      }
+      if (!result.record || !result.record.approver_1 || !result.record.approver_2) {
+        $("cErr").textContent = "The server response did not include both approvers; verify the ledger before retrying.";
+        return false;
+      }
+      let localSaveError = "";
+      try {
+        commitState(function (draft) {
+          const item = draft.corrections.find(function (entry) { return entry.id === id; });
+          if (!item) return;
+          item.status = "Approved";
+          item.first = "Approved";
+          item.second = "Approved";
+          item.firstName = result.record.approver_1;
+          item.secondName = result.record.approver_2;
+          item.date = result.record.created_at || new Date().toISOString();
+          appendAudit(draft, "Correction approved and appended to server ledger", item.recordId, "Success", currentUser.name);
+        });
+      } catch (error) {
+        localSaveError = error.message || "Browser storage is unavailable.";
+        const item = findCorrection(id);
+        if (item) {
+          item.status = "Approved";
+          item.first = "Approved";
+          item.second = "Approved";
+          item.firstName = result.record.approver_1;
+          item.secondName = result.record.approver_2;
+          item.date = result.record.created_at || new Date().toISOString();
+        }
+      }
+      const synced = await syncServerLedger();
+      await renderAll();
+      if (localSaveError) {
+        toast("Server correction succeeded, but this browser could not save its request status: " + localSaveError, "warn");
+      } else if (!synced) {
+        toast("Correction was appended to the server, but the browser could not refresh the ledger.", "warn");
+      } else {
+        toast("Correction approved by two accounts and appended to the server ledger.", "ok");
+      }
+      return true;
+    } catch (error) {
+      $("cErr").textContent = error.message || "The correction could not be approved.";
+      return false;
+    } finally {
+      $("cSecondPassword").value = "";
+    }
   }
 
   function openCorrectionRequest(recordId) {
@@ -1136,7 +1249,7 @@
         appendAudit(draft, "Correction requested", record.id, "Success");
       });
       renderAll();
-      toast("Correction request submitted for two approvals.", "ok");
+      toast("Correction request saved in this browser. Approval requires two approver accounts.", "ok");
     } catch (error) {
       $("cErr").textContent = error.message;
       return false;
@@ -1267,6 +1380,62 @@
     $("brandRole").textContent = state.settings.role;
   }
 
+  async function loadUserManagement() {
+    const card = $("roleManagementCard");
+    card.hidden = !currentUser || currentUser.role !== "admin";
+    if (card.hidden) return;
+
+    const status = $("userManagementStatus");
+    status.textContent = "Loading accounts…";
+    try {
+      const response = await fetch(API_BASE + "/api/admin/users", { credentials: "include" });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || "Could not load accounts.");
+      const roles = ["viewer", "publisher", "approver", "admin"];
+      $("userManagementBody").innerHTML = result.users.map(function (user) {
+        const isCurrentUser = user.id === currentUser.id;
+        const options = roles.map(function (role) {
+          return '<option value="' + role + '"' + (user.role === role ? " selected" : "") + ">" +
+            role.charAt(0).toUpperCase() + role.slice(1) + "</option>";
+        }).join("");
+        return "<tr><td>" + esc(user.name) + (isCurrentUser ? " (you)" : "") + "</td><td>" +
+          esc(user.email) + "</td><td><select aria-label=\"Role for " + esc(user.email) +
+          "\" data-user-role=\"" + user.id + "\"" + (isCurrentUser ? " disabled" : "") + ">" + options +
+          "</select></td><td>" + esc(user.created_at) + "</td><td><button class=\"btn sm\" data-save-role=\"" +
+          user.id + "\"" + (isCurrentUser ? " disabled" : "") + ">Save role</button></td></tr>";
+      }).join("");
+      status.textContent = result.users.length + " account(s). Role changes take effect immediately.";
+    } catch (error) {
+      status.textContent = error.message;
+      $("userManagementBody").innerHTML = "";
+    }
+  }
+
+  async function saveUserRole(userId) {
+    const select = document.querySelector('[data-user-role="' + userId + '"]');
+    const button = document.querySelector('[data-save-role="' + userId + '"]');
+    if (!select || !button) return;
+    button.disabled = true;
+    try {
+      const response = await fetch(API_BASE + "/api/admin/users/" + encodeURIComponent(userId) + "/role", {
+        method: "PATCH",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfToken
+        },
+        body: JSON.stringify({ role: select.value })
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || "Could not update the account role.");
+      toast("Updated " + result.user.email + " to " + result.user.role + ".", "ok");
+      await loadUserManagement();
+    } catch (error) {
+      toast("Role update failed: " + error.message, "bad");
+      button.disabled = false;
+    }
+  }
+
   function saveSettings() {
     const email = $("sEmail").value.trim();
     const values = {
@@ -1351,6 +1520,7 @@
         });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "Authentication failed.");
+        csrfToken = result.csrf_token || "";
         closeAuth();
         $("authForm").reset();
         showSignedInApp(result.user);
@@ -1368,7 +1538,7 @@
       if (button) showView(button.dataset.view);
     });
     document.addEventListener("click", function (event) {
-      const target = event.target.closest("[data-go],[data-student],[data-view-result],[data-download],[data-qr],[data-request]");
+      const target = event.target.closest("[data-go],[data-student],[data-view-result],[data-download],[data-qr],[data-request],[data-approve],[data-save-role]");
       if (!target) return;
       if (target.dataset.go) showView(target.dataset.go);
       else if (target.dataset.student) showStudent(target.dataset.student);
@@ -1376,6 +1546,8 @@
       else if (target.dataset.download) downloadRecord(target.dataset.download);
       else if (target.dataset.qr) showQrForRecord(target.dataset.qr);
       else if (target.dataset.request) viewRequest(target.dataset.request);
+      else if (target.dataset.approve) confirmDecision(target.dataset.approve);
+      else if (target.dataset.saveRole) saveUserRole(target.dataset.saveRole);
     });
     $("menuBtn").addEventListener("click", openMenu);
     $("backdrop").addEventListener("click", closeMenu);

@@ -19,13 +19,14 @@ Exam marksheets can be forged or silently edited after publication. Institutions
 - Results ledger with search, integrity filters, pagination, record export and QR display
 - Publish any student result with SHA-256 Web Crypto hashing and a chained `prevHash`
 - Verify records by ID, SHA-256 hash or QR JSON payload
-- Correction requests with session-backed two-approver decisions pending
+- Administrator account-role management
+- Correction approvals using two distinct authenticated approver accounts
 - Audit logs with search and status filter
 - Settings and ledger records persisted in browser `localStorage`
 - Dark graphite and neon-lime theme with adjustable green accents
 - Responsive layout, keyboard-friendly controls and accessible text status labels
 
-> **Security model:** Login uses signed server sessions. New accounts have the `viewer` role; publishing requires the `publisher` or `admin` role. The frontend correction decisions are paused until the authenticated two-approver flow is available; the backend correction API still accepts separate API-key approvers. Never expose API keys in the browser or commit secrets to the repository.
+> **Security model:** Login uses signed server sessions and CSRF tokens for mutations. New accounts have the `viewer` role; publishing requires the `publisher` or `admin` role. Correction approval requires a signed-in approver and re-authentication of a second, distinct approver. Never expose API keys in the browser or commit secrets to the repository.
 
 ## Technology Stack
 HTML5 · CSS3 · Vanilla JavaScript · Web Crypto API · Lucide icons (pinned CDN) · QRCode.js (pinned CDN) · Inter font (Google Fonts CDN)
@@ -58,7 +59,7 @@ The ledger starts empty. Add a student or publish a result to create records. A 
 
 Records, correction requests, audit entries, and settings are saved per browser profile. A QR payload identifies a record but does not contain a server-verifiable signature; another browser can verify it only if it has the same local ledger data.
 
-The login and signup flows use the Flask backend. New accounts default to viewer access; an administrator must assign publishing or approval roles through a trusted process. Correction approval and rejection controls remain disabled until both approvers can be authenticated by the session-based frontend.
+The login and signup flows use the Flask backend. New accounts default to viewer access. Set `VERIGRADE_ADMIN_EMAIL` to the email address of the trusted initial administrator; that account is promoted on sign-in and can assign roles from **Settings → Account access**. Correction requests are saved per browser; approval appends the corrected result to the shared server ledger after two distinct approvers authenticate. Rejection is not yet available.
 
 Run the ledger tests with `node --test tests/ledger.test.js`.
 
@@ -93,6 +94,7 @@ Configure these Railway environment variables:
 - `VERIGRADE_CORS_ORIGINS`: comma-separated allowed frontend origins. Leave unset only for same-origin/API tooling scenarios.
 - `VERIGRADE_SESSION_SECRET`: a long random secret used to sign login sessions.
 - `VERIGRADE_COOKIE_SECURE`: set to `1` in HTTPS production deployments.
+- `VERIGRADE_ADMIN_EMAIL`: email address of the account to bootstrap as the initial administrator.
 - `VERIGRADE_API_KEYS`: backend-only credentials with publisher/approver roles for direct API integrations. The frontend no longer collects or sends these keys.
 
 ## Screenshots
@@ -101,7 +103,7 @@ _Add screenshots here._
 ## Roadmap
 - Authenticated backend and shared database
 - Server-side verification and cryptographic signatures
-- Role-based authentication for administrators and approvers
+- Server-backed correction request and rejection workflow
 - Integrated camera scanning for QR payloads
 
 ## AI Usage Acknowledgement

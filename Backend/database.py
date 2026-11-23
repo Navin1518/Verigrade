@@ -43,6 +43,7 @@ COLUMNS = (
     "target_id", "supersedes_id", "reason", "approver_1", "approver_2",
     "prev_hash", "record_hash", "created_at",
 )
+USER_ROLES = {"viewer", "publisher", "approver", "admin"}
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS ledger (
@@ -291,6 +292,38 @@ def find_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
             (user_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def list_users() -> List[Dict[str, Any]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, name, email, role, created_at FROM users ORDER BY id"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_user_role(user_id: int, role: str) -> Optional[Dict[str, Any]]:
+    if role not in USER_ROLES:
+        raise ValueError("Invalid user role.")
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute(
+            "SELECT role FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if not current:
+            return None
+        if current["role"] == "admin" and role != "admin":
+            admin_count = conn.execute(
+                "SELECT COUNT(*) FROM users WHERE role = 'admin'"
+            ).fetchone()[0]
+            if admin_count <= 1:
+                raise ValueError("The last administrator cannot be demoted.")
+        conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+        updated = conn.execute(
+            "SELECT id, name, email, role, created_at FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    return dict(updated)
 
 
 def create_user(name: str, email: str, password_hash: str, role: str = "viewer") -> Dict[str, Any]:

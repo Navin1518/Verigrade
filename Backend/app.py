@@ -21,6 +21,7 @@ import json
 import hmac
 import os
 import re
+import secrets
 import sqlite3
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -63,7 +64,7 @@ allowed_origins = [
 CORS(
     app,
     resources={r"/api/*": {"origins": allowed_origins or "null"}},
-    allow_headers=["Content-Type", "Authorization", "X-Verigrade-Approver-2"],
+    allow_headers=["Content-Type", "Authorization", "X-Verigrade-Approver-2", "X-CSRF-Token"],
     supports_credentials=True,
 )
 
@@ -140,12 +141,36 @@ def authenticated_session_user(required_role: str | None = None):
     if not user:
         session.clear()
         return None
+    user = promote_configured_admin(user)
     if required_role:
         role = user["role"]
         permitted = role == "admin" or role == required_role
         if not permitted:
             return None
     return user
+
+
+def promote_configured_admin(user: dict) -> dict:
+    admin_email = os.environ.get("VERIGRADE_ADMIN_EMAIL", "").strip().lower()
+    if admin_email and user["email"].lower() == admin_email and user["role"] != "admin":
+        return db.update_user_role(user["id"], "admin") or user
+    return user
+
+
+def issue_csrf_token() -> str:
+    token = session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["csrf_token"] = token
+    return token
+
+
+def require_csrf():
+    expected = session.get("csrf_token", "")
+    supplied = request.headers.get("X-CSRF-Token", "")
+    if not expected or not hmac.compare_digest(expected, supplied):
+        return api_error("A valid CSRF token is required.", "CSRF_FAILED", 403)
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -381,10 +406,12 @@ def signup():
     except sqlite3.IntegrityError:
         return api_error("An account with this email already exists.", "EMAIL_EXISTS", 409)
 
+    user = promote_configured_admin(user)
     session.clear()
     session["user_id"] = user["id"]
     session.permanent = True
-    return api_ok({"message": "Account created.", "user": user}, 201)
+    csrf_token = issue_csrf_token()
+    return api_ok({"message": "Account created.", "user": user, "csrf_token": csrf_token}, 201)
 
 
 @app.post("/api/auth/login")
@@ -406,9 +433,11 @@ def login():
     if not user or not check_password_hash(user["password_hash"], password):
         return api_error("Invalid email or password.", "UNAUTHENTICATED", 401)
 
+    user = promote_configured_admin(user)
     session.clear()
     session["user_id"] = user["id"]
     session.permanent = True
+    csrf_token = issue_csrf_token()
     return api_ok({
         "message": "Signed in.",
         "user": {
@@ -417,11 +446,16 @@ def login():
             "email": user["email"],
             "role": user["role"],
         },
+        "csrf_token": csrf_token,
     })
 
 
 @app.post("/api/auth/logout")
 def logout():
+    if session.get("user_id"):
+        csrf_error = require_csrf()
+        if csrf_error:
+            return csrf_error
     session.clear()
     return api_ok({"message": "Signed out."})
 
@@ -431,14 +465,63 @@ def auth_me():
     user = db.find_user_by_id(session.get("user_id")) if session.get("user_id") else None
     if not user:
         return api_error("Not signed in.", "UNAUTHENTICATED", 401)
+    user = promote_configured_admin(user)
     return api_ok({
         "user": {
             "id": user["id"],
             "name": user["name"],
             "email": user["email"],
             "role": user["role"],
-        }
+        },
+        "csrf_token": issue_csrf_token(),
     })
+
+
+@app.get("/api/admin/users")
+def admin_list_users():
+    user = authenticated_session_user()
+    if not user:
+        return api_error("Sign-in is required.", "UNAUTHENTICATED", 401)
+    if user["role"] != "admin":
+        return api_error("Administrator access is required.", "FORBIDDEN", 403)
+    return api_ok({"users": db.list_users()})
+
+
+@app.patch("/api/admin/users/<int:user_id>/role")
+def admin_update_user_role(user_id: int):
+    user = authenticated_session_user()
+    if not user:
+        return api_error("Sign-in is required.", "UNAUTHENTICATED", 401)
+    if user["role"] != "admin":
+        return api_error("Administrator access is required.", "FORBIDDEN", 403)
+    csrf_error = require_csrf()
+    if csrf_error:
+        return csrf_error
+
+    body, body_error = read_json_body()
+    if body_error:
+        return api_error(body_error, "MALFORMED_JSON", 400)
+    if not isinstance(body, dict):
+        return api_error("Request body must be a JSON object.", "VALIDATION_ERROR", 400)
+    role = body.get("role")
+    if not isinstance(role, str) or role not in db.USER_ROLES:
+        return api_error("Choose a valid user role.", "VALIDATION_ERROR", 400)
+
+    target = db.find_user_by_id(user_id)
+    if not target:
+        return api_error("User not found.", "NOT_FOUND", 404)
+    admin_email = os.environ.get("VERIGRADE_ADMIN_EMAIL", "").strip().lower()
+    if target["email"].lower() == admin_email and role != "admin":
+        return api_error("The configured bootstrap administrator cannot be demoted.", "FORBIDDEN", 403)
+    if target["id"] == user["id"] and role != "admin":
+        return api_error("You cannot change your own administrator role.", "FORBIDDEN", 403)
+    try:
+        updated = db.update_user_role(user_id, role)
+    except ValueError as exc:
+        return api_error(str(exc), "FORBIDDEN", 409)
+    if not updated:
+        return api_error("User not found.", "NOT_FOUND", 404)
+    return api_ok({"user": updated})
 
 
 # --------------------------------------------------------------------------
@@ -496,9 +579,14 @@ def publish_result():
     Rejects duplicates of ``(roll_no, subject, exam_session)`` with HTTP 409
     rather than silently overwriting — history is sacred.
     """
-    principal = authenticated_session_user("publisher")
-    if principal:
-        principal = {"name": principal["name"], "roles": {"publisher"}}
+    user = authenticated_session_user()
+    if user:
+        if user["role"] not in ("publisher", "admin"):
+            return api_error("A publisher role is required.", "FORBIDDEN", 403)
+        csrf_error = require_csrf()
+        if csrf_error:
+            return csrf_error
+        principal = {"name": user["name"], "roles": {"publisher"}}
     else:
         principal, auth_error = authenticate_principal("publisher")
         if auth_error:
@@ -650,24 +738,58 @@ def create_correction():
       * two DISTINCT approver IDs/names are mandatory
     The original row is never touched — this only appends a new chained entry.
     """
-    approver_1, auth_error = authenticate_principal("approver", "Authorization")
-    if auth_error:
-        return auth_error
-    approver_2, auth_error = authenticate_principal("approver", "X-Verigrade-Approver-2")
-    if auth_error:
-        return auth_error
-    if approver_1["name"].lower() == approver_2["name"].lower():
-        return api_error(
-            "Two DIFFERENT authenticated approvers are required.",
-            "APPROVERS_NOT_DISTINCT",
-            400,
-        )
+    user = authenticated_session_user()
+    if user:
+        if user["role"] not in ("approver", "admin"):
+            return api_error("An approver role is required.", "FORBIDDEN", 403)
+        csrf_error = require_csrf()
+        if csrf_error:
+            return csrf_error
+        approver_1 = {"name": user["name"], "user_id": user["id"]}
+        approver_2 = None
+    else:
+        approver_1, auth_error = authenticate_principal("approver", "Authorization")
+        if auth_error:
+            return auth_error
+        approver_2, auth_error = authenticate_principal("approver", "X-Verigrade-Approver-2")
+        if auth_error:
+            return auth_error
+        if approver_1["name"].lower() == approver_2["name"].lower():
+            return api_error(
+                "Two DIFFERENT authenticated approvers are required.",
+                "APPROVERS_NOT_DISTINCT",
+                400,
+            )
 
     body, body_error = read_json_body()
     if body_error:
         return api_error(body_error, "MALFORMED_JSON", 400)
     if not isinstance(body, dict):
         return api_error("Request body must be a JSON object.", "VALIDATION_ERROR", 400)
+    if user:
+        second_email, email_problem = clean_text(
+            body.get("second_approver_email"), "second_approver_email", 120
+        )
+        second_password = body.get("second_approver_password")
+        if email_problem or not isinstance(second_password, str) or not second_password:
+            return api_error(
+                "A second approver's email and password are required.",
+                "VALIDATION_ERROR",
+                400,
+            )
+        second_user = db.find_user_by_email(second_email)
+        if not second_user or not check_password_hash(second_user["password_hash"], second_password):
+            return api_error("Invalid second approver credentials.", "UNAUTHENTICATED", 401)
+        second_user = promote_configured_admin(second_user)
+        if second_user["role"] not in ("approver", "admin"):
+            return api_error("The second account does not have an approver role.", "FORBIDDEN", 403)
+        if second_user["id"] == user["id"]:
+            return api_error(
+                "Two different approver accounts are required.",
+                "APPROVERS_NOT_DISTINCT",
+                400,
+            )
+        approver_2 = {"name": second_user["name"], "user_id": second_user["id"]}
 
     audit = ledger.audit_chain(db.fetch_all_entries())
     items = audit["entries"]

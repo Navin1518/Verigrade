@@ -290,7 +290,7 @@
 
       <!-- CORRECTIONS -->
       <section class="view" id="corrections">
-        <div class="page-head"><div><h1>Corrections &amp; Approvals</h1><p>Each correction needs two approvers.</p></div></div>
+        <div class="page-head"><div><h1>Corrections &amp; Approvals</h1><p>Requests are saved in this browser; approval requires two distinct approver accounts and appends to the server ledger. Rejection is not available yet.</p></div></div>
         <div id="correctionList" class="cards"></div>
       </section>
 
@@ -325,6 +325,15 @@
             <div class="field"><label for="sAccent">Accent colour</label><select id="sAccent"><option value="#C2F23A">Neon lime</option><option value="#94D52F">Leaf green</option><option value="#E6FF68">Lemon glow</option></select></div>
             <h2 class="sub">Application information</h2>
             <p class="muted">VERIGRADE · SHA-256 shared ledger · SQLite-backed API</p></div>
+        </div>
+        <div class="card" id="roleManagementCard" hidden>
+          <h2>Account access</h2>
+          <p class="muted">Assign viewer, publisher, approver, or administrator access. Your own role is locked to prevent accidental lockout.</p>
+          <p class="notice" id="userManagementStatus" role="status">Accounts will load when this section opens.</p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Created</th><th></th></tr></thead>
+            <tbody id="userManagementBody"></tbody>
+          </table></div>
         </div>
       </section>
     </main>

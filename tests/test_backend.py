@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "Backend"))
@@ -147,11 +148,15 @@ class BackendApiTests(unittest.TestCase):
             "password": "StrongPass123",
         })
         self.assertEqual(signup.status_code, 201)
+        self.assertEqual(signup.get_json()["user"]["role"], "viewer")
         me = self.client.get("/api/auth/me")
         self.assertEqual(me.status_code, 200)
         self.assertEqual(me.get_json()["user"]["email"], "test@example.com")
 
-        logout = self.client.post("/api/auth/logout")
+        logout = self.client.post(
+            "/api/auth/logout",
+            headers={"X-CSRF-Token": me.get_json()["csrf_token"]},
+        )
         self.assertEqual(logout.status_code, 200)
         me = self.client.get("/api/auth/me")
         self.assertEqual(me.status_code, 401)
@@ -161,6 +166,156 @@ class BackendApiTests(unittest.TestCase):
             "password": "StrongPass123",
         })
         self.assertEqual(login.status_code, 200)
+
+    def test_session_publish_requires_role_and_csrf_token(self):
+        signup = self.client.post("/api/auth/signup", json={
+            "name": "Publisher Account",
+            "email": "session-publisher@example.com",
+            "password": "StrongPass123",
+        })
+        token = signup.get_json()["csrf_token"]
+        payload = {
+            "roll_no": "SESSION-001",
+            "student_name": "Session Student",
+            "subject": "Science",
+            "marks": 70,
+        }
+
+        forbidden = self.client.post(
+            "/api/publish",
+            headers={"X-CSRF-Token": token},
+            json=payload,
+        )
+        self.assertEqual(forbidden.status_code, 403)
+        self.assertEqual(forbidden.get_json()["code"], "FORBIDDEN")
+
+        user = backend.db.find_user_by_email("session-publisher@example.com")
+        backend.db.update_user_role(user["id"], "publisher")
+        missing_token = self.client.post("/api/publish", json=payload)
+        self.assertEqual(missing_token.status_code, 403)
+        self.assertEqual(missing_token.get_json()["code"], "CSRF_FAILED")
+
+        published = self.client.post(
+            "/api/publish",
+            headers={"X-CSRF-Token": token},
+            json=payload,
+        )
+        self.assertEqual(published.status_code, 201)
+
+    def test_bootstrap_admin_can_manage_roles(self):
+        with patch.dict(os.environ, {"VERIGRADE_ADMIN_EMAIL": "bootstrap@example.com"}):
+            admin_client = backend.app.test_client()
+            admin_signup = admin_client.post("/api/auth/signup", json={
+                "name": "Bootstrap Admin",
+                "email": "bootstrap@example.com",
+                "password": "StrongPass123",
+            })
+            self.assertEqual(admin_signup.status_code, 201)
+            self.assertEqual(admin_signup.get_json()["user"]["role"], "admin")
+
+            viewer_client = backend.app.test_client()
+            viewer_signup = viewer_client.post("/api/auth/signup", json={
+                "name": "New Publisher",
+                "email": "new-publisher@example.com",
+                "password": "StrongPass123",
+            })
+            self.assertEqual(viewer_signup.get_json()["user"]["role"], "viewer")
+            viewer = backend.db.find_user_by_email("new-publisher@example.com")
+
+            listed = admin_client.get("/api/admin/users")
+            self.assertEqual(listed.status_code, 200)
+            missing_csrf = admin_client.patch(
+                f"/api/admin/users/{viewer['id']}/role",
+                json={"role": "publisher"},
+            )
+            self.assertEqual(missing_csrf.status_code, 403)
+            self.assertEqual(missing_csrf.get_json()["code"], "CSRF_FAILED")
+            changed = admin_client.patch(
+                f"/api/admin/users/{viewer['id']}/role",
+                headers={"X-CSRF-Token": admin_signup.get_json()["csrf_token"]},
+                json={"role": "publisher"},
+            )
+            self.assertEqual(changed.status_code, 200)
+            self.assertEqual(changed.get_json()["user"]["role"], "publisher")
+
+            self_change = admin_client.patch(
+                f"/api/admin/users/{admin_signup.get_json()['user']['id']}/role",
+                headers={"X-CSRF-Token": admin_signup.get_json()["csrf_token"]},
+                json={"role": "viewer"},
+            )
+            self.assertEqual(self_change.status_code, 403)
+
+        denied = viewer_client.get("/api/admin/users")
+        self.assertEqual(denied.status_code, 403)
+
+    def test_session_correction_requires_two_distinct_approvers(self):
+        first_client = self.client
+        first_signup = first_client.post("/api/auth/signup", json={
+            "name": "Approver One Session",
+            "email": "approver-one-session@example.com",
+            "password": "StrongPass123",
+        })
+        second_client = backend.app.test_client()
+        second_signup = second_client.post("/api/auth/signup", json={
+            "name": "Approver Two Session",
+            "email": "approver-two-session@example.com",
+            "password": "StrongPass123",
+        })
+        first_user = backend.db.find_user_by_email("approver-one-session@example.com")
+        second_user = backend.db.find_user_by_email("approver-two-session@example.com")
+        viewer_decision = first_client.post("/api/corrections", json={})
+        self.assertEqual(viewer_decision.status_code, 403)
+        self.assertEqual(viewer_decision.get_json()["code"], "FORBIDDEN")
+        backend.db.update_user_role(first_user["id"], "approver")
+        backend.db.update_user_role(second_user["id"], "approver")
+
+        published = backend.app.test_client().post(
+            "/api/publish",
+            headers=self.publish_headers(),
+            json={
+                "roll_no": "SESSION-COR-001",
+                "student_name": "Correction Student",
+                "subject": "Physics",
+                "marks": 60,
+            },
+        )
+        record_id = published.get_json()["record"]["id"]
+        payload = {
+            "target_id": record_id,
+            "new_marks": 65,
+            "reason": "Verified source-register transcription error.",
+            "second_approver_email": "approver-one-session@example.com",
+            "second_approver_password": "StrongPass123",
+        }
+        same_approver = first_client.post(
+            "/api/corrections",
+            headers={"X-CSRF-Token": first_signup.get_json()["csrf_token"]},
+            json=payload,
+        )
+        self.assertEqual(same_approver.status_code, 400)
+        self.assertEqual(same_approver.get_json()["code"], "APPROVERS_NOT_DISTINCT")
+
+        payload["second_approver_email"] = "approver-two-session@example.com"
+        payload["second_approver_password"] = "WrongPass123"
+        wrong_password = first_client.post(
+            "/api/corrections",
+            headers={"X-CSRF-Token": first_signup.get_json()["csrf_token"]},
+            json=payload,
+        )
+        self.assertEqual(wrong_password.status_code, 401)
+        self.assertEqual(wrong_password.get_json()["code"], "UNAUTHENTICATED")
+
+        payload["second_approver_email"] = "approver-two-session@example.com"
+        payload["second_approver_password"] = "StrongPass123"
+        approved = first_client.post(
+            "/api/corrections",
+            headers={"X-CSRF-Token": first_signup.get_json()["csrf_token"]},
+            json=payload,
+        )
+        self.assertEqual(approved.status_code, 201)
+        record = approved.get_json()["record"]
+        self.assertEqual(record["approver_1"], "Approver One Session")
+        self.assertEqual(record["approver_2"], "Approver Two Session")
 
     def test_login_rejects_wrong_password(self):
         self.client.post("/api/auth/signup", json={

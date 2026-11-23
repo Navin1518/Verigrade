@@ -41,6 +41,7 @@ HASHED_FIELDS = (
     "student_name",
     "subject",
     "marks",
+    "max_marks",
     "exam_session",
     "target_id",
     "supersedes_id",
@@ -130,9 +131,9 @@ def build_hash_payload(entry: dict) -> dict:
     payload = {}
     for field in HASHED_FIELDS:
         raw = entry.get(field)
-        if field == "marks":
-            marks = _as_int(raw)
-            payload[field] = marks  # may be None -> validation will flag it
+        if field in ("marks", "max_marks"):
+            value = _as_int(raw)
+            payload[field] = value
         elif field in ("target_id", "supersedes_id"):
             payload[field] = None if raw in (None, "") else _as_int(raw)
         else:
@@ -156,6 +157,8 @@ def compute_record_hash(entry: dict) -> str:
     payload = build_hash_payload(entry)
     if payload["marks"] is None:
         raise ValueError("marks is not numeric — cannot compute a hash")
+    if payload["max_marks"] is None:
+        raise ValueError("max_marks is not numeric — cannot compute a hash")
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 

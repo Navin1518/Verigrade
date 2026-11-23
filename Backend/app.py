@@ -18,12 +18,15 @@ reported with a clear message and the right HTTP status — never with a 500.
 from __future__ import annotations
 
 import json
+import hmac
 import os
 import re
 import sqlite3
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
+from flask import session
+from werkzeug.security import check_password_hash, generate_password_hash
 
 try:
     from . import database as db
@@ -40,12 +43,109 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
 
 app = Flask(__name__, static_folder=None)          # we serve the frontend manually
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+session_secret = os.environ.get("VERIGRADE_SESSION_SECRET")
+if not session_secret:
+    if os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RENDER"):
+        raise RuntimeError("VERIGRADE_SESSION_SECRET must be configured in production.")
+    session_secret = "local-development-only-change-before-deploy"
+secure_session_cookie = os.environ.get("VERIGRADE_COOKIE_SECURE", "1") == "1"
+app.config["SECRET_KEY"] = session_secret
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="None" if secure_session_cookie else "Lax",
+    SESSION_COOKIE_SECURE=secure_session_cookie,
+)
+allowed_origins = [
+    origin.strip()
+    for origin in os.environ.get("VERIGRADE_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+CORS(
+    app,
+    resources={r"/api/*": {"origins": allowed_origins or "null"}},
+    allow_headers=["Content-Type", "Authorization", "X-Verigrade-Approver-2"],
+    supports_credentials=True,
+)
 
 db.init_db()  # create results.db + schema if missing (persistence across restarts)
 
 DEFAULT_SESSION = "2025-2026"
 CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def load_api_principals() -> dict[str, dict]:
+    """Load API-key principals from VERIGRADE_API_KEYS JSON."""
+    raw = os.environ.get("VERIGRADE_API_KEYS", "").strip()
+    if not raw:
+        return {}
+    try:
+        configured = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(configured, dict):
+        return {}
+
+    principals = {}
+    for api_key, value in configured.items():
+        if not isinstance(api_key, str) or not api_key:
+            continue
+        if isinstance(value, str):
+            value = {"name": value, "roles": ["publisher", "approver"]}
+        if not isinstance(value, dict):
+            continue
+        name = value.get("name")
+        roles = value.get("roles")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        if not isinstance(roles, list):
+            continue
+        principals[api_key] = {
+            "name": name.strip(),
+            "roles": {role for role in roles if role in ("publisher", "approver")},
+        }
+    return principals
+
+
+def authenticate_principal(required_role: str, header_name: str = "Authorization"):
+    """Authenticate one Bearer/X-API-Key principal and return it or an error."""
+    raw = request.headers.get(header_name, "")
+    if header_name == "Authorization" and raw.lower().startswith("bearer "):
+        api_key = raw[7:].strip()
+    else:
+        api_key = raw.strip()
+
+    if not api_key:
+        return None, api_error(
+            "Authentication is required.", "UNAUTHENTICATED", 401
+        )
+
+    for configured_key, principal in load_api_principals().items():
+        if hmac.compare_digest(api_key, configured_key):
+            if required_role not in principal["roles"]:
+                return None, api_error(
+                    "This credential is not authorized for this operation.",
+                    "FORBIDDEN",
+                    403,
+                )
+            return principal, None
+
+    return None, api_error("Invalid API credential.", "UNAUTHENTICATED", 401)
+
+
+def authenticated_session_user(required_role: str | None = None):
+    user_id = session.get("user_id")
+    if not user_id:
+        return None
+    user = db.find_user_by_id(user_id)
+    if not user:
+        session.clear()
+        return None
+    if required_role:
+        role = user["role"]
+        permitted = role == "admin" or role == required_role
+        if not permitted:
+            return None
+    return user
 
 
 # --------------------------------------------------------------------------
@@ -239,6 +339,109 @@ def parse_verify_request(body):
 
 
 # --------------------------------------------------------------------------
+# API: login and signup
+# --------------------------------------------------------------------------
+
+@app.post("/api/auth/signup")
+def signup():
+    body, body_error = read_json_body()
+    if body_error:
+        return api_error(body_error, "MALFORMED_JSON", 400)
+    if not isinstance(body, dict):
+        return api_error("Request body must be a JSON object.", "VALIDATION_ERROR", 400)
+
+    name, name_problem = clean_text(body.get("name"), "name", 80)
+    email, email_problem = clean_text(body.get("email"), "email", 120)
+    password = body.get("password")
+    if name_problem:
+        return api_error(name_problem, "VALIDATION_ERROR", 400)
+    if email_problem:
+        return api_error(email_problem, "VALIDATION_ERROR", 400)
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return api_error("Enter a valid email address.", "VALIDATION_ERROR", 400)
+    if not isinstance(password, str) or len(password) < 8:
+        return api_error(
+            "Password must be at least 8 characters.",
+            "VALIDATION_ERROR",
+            400,
+        )
+    if db.find_user_by_email(email):
+        return api_error(
+            "An account with this email already exists.",
+            "EMAIL_EXISTS",
+            409,
+        )
+
+    try:
+        user = db.create_user(
+            name,
+            email,
+            generate_password_hash(password, method="scrypt"),
+        )
+    except sqlite3.IntegrityError:
+        return api_error("An account with this email already exists.", "EMAIL_EXISTS", 409)
+
+    session.clear()
+    session["user_id"] = user["id"]
+    session.permanent = True
+    return api_ok({"message": "Account created.", "user": user}, 201)
+
+
+@app.post("/api/auth/login")
+def login():
+    body, body_error = read_json_body()
+    if body_error:
+        return api_error(body_error, "MALFORMED_JSON", 400)
+    if not isinstance(body, dict):
+        return api_error("Request body must be a JSON object.", "VALIDATION_ERROR", 400)
+
+    email, problem = clean_text(body.get("email"), "email", 120)
+    password = body.get("password")
+    if problem:
+        return api_error(problem, "VALIDATION_ERROR", 400)
+    if not isinstance(password, str):
+        return api_error("Password is required.", "VALIDATION_ERROR", 400)
+
+    user = db.find_user_by_email(email)
+    if not user or not check_password_hash(user["password_hash"], password):
+        return api_error("Invalid email or password.", "UNAUTHENTICATED", 401)
+
+    session.clear()
+    session["user_id"] = user["id"]
+    session.permanent = True
+    return api_ok({
+        "message": "Signed in.",
+        "user": {
+            "id": user["id"],
+            "name": user["name"],
+            "email": user["email"],
+            "role": user["role"],
+        },
+    })
+
+
+@app.post("/api/auth/logout")
+def logout():
+    session.clear()
+    return api_ok({"message": "Signed out."})
+
+
+@app.get("/api/auth/me")
+def auth_me():
+    user = db.find_user_by_id(session.get("user_id")) if session.get("user_id") else None
+    if not user:
+        return api_error("Not signed in.", "UNAUTHENTICATED", 401)
+    return api_ok({
+        "user": {
+            "id": user["id"],
+            "name": user["name"],
+            "email": user["email"],
+            "role": user["role"],
+        }
+    })
+
+
+# --------------------------------------------------------------------------
 # Static frontend (so http://127.0.0.1:5000 just works)
 # --------------------------------------------------------------------------
 
@@ -293,6 +496,14 @@ def publish_result():
     Rejects duplicates of ``(roll_no, subject, exam_session)`` with HTTP 409
     rather than silently overwriting — history is sacred.
     """
+    principal = authenticated_session_user("publisher")
+    if principal:
+        principal = {"name": principal["name"], "roles": {"publisher"}}
+    else:
+        principal, auth_error = authenticate_principal("publisher")
+        if auth_error:
+            return auth_error
+
     body, body_error = read_json_body()
     if body_error:
         return api_error(body_error, "MALFORMED_JSON", 400)
@@ -300,17 +511,6 @@ def publish_result():
     clean, problems = parse_result_payload(body)
     if problems:
         return api_error(" ".join(problems), "VALIDATION_ERROR", 400, details=problems)
-
-    existing = db.find_publish(clean["roll_no"], clean["subject"], clean["exam_session"])
-    if existing:
-        return api_error(
-            f"Duplicate result: a PUBLISH entry already exists for roll "
-            f"'{clean['roll_no']}' in subject '{clean['subject']}' for session "
-            f"'{clean['exam_session']}'. Overwriting is never allowed — use the "
-            f"2-admin correction flow to change marks.",
-            "DUPLICATE_RECORD", 409,
-            existing_entry_id=existing["id"],
-        )
 
     entry = {
         "entry_type": "PUBLISH",
@@ -328,17 +528,32 @@ def publish_result():
         "created_at": ledger.utc_now_iso(),
     }
 
-    # Seal into the chain: prev_hash = hash of the newest existing entry.
-    entry = ledger.prepare_entry(entry, db.fetch_tip_hash())
-
     try:
-        entry_id = db.insert_entry(entry)
+        entry_id = db.append_entry(
+            entry,
+            (clean["roll_no"], clean["subject"], clean["exam_session"]),
+        )
     except sqlite3.IntegrityError as exc:
+        if "DUPLICATE_PUBLISH" in str(exc):
+            existing = db.find_publish(
+                clean["roll_no"], clean["subject"], clean["exam_session"]
+            )
+            return api_error(
+                f"Duplicate result: a PUBLISH entry already exists for roll "
+                f"'{clean['roll_no']}' in subject '{clean['subject']}' for session "
+                f"'{clean['exam_session']}'. Overwriting is never allowed — use the "
+                f"2-admin correction flow to change marks.",
+                "DUPLICATE_RECORD", 409,
+                existing_entry_id=existing["id"] if existing else None,
+            )
         return api_error(
             f"The ledger rejected this entry ({exc}). Please retry.",
             "INSERT_FAILED", 409,
         )
 
+    entry = db.fetch_entry(entry_id)
+    if entry is None:
+        return api_error("The published entry could not be loaded.", "INSERT_FAILED", 500)
     entry["id"] = entry_id
     return api_ok({
         "message": f"Result #{entry_id} published and sealed into the hash chain.",
@@ -435,6 +650,19 @@ def create_correction():
       * two DISTINCT approver IDs/names are mandatory
     The original row is never touched — this only appends a new chained entry.
     """
+    approver_1, auth_error = authenticate_principal("approver", "Authorization")
+    if auth_error:
+        return auth_error
+    approver_2, auth_error = authenticate_principal("approver", "X-Verigrade-Approver-2")
+    if auth_error:
+        return auth_error
+    if approver_1["name"].lower() == approver_2["name"].lower():
+        return api_error(
+            "Two DIFFERENT authenticated approvers are required.",
+            "APPROVERS_NOT_DISTINCT",
+            400,
+        )
+
     body, body_error = read_json_body()
     if body_error:
         return api_error(body_error, "MALFORMED_JSON", 400)
@@ -511,17 +739,6 @@ def create_correction():
             "VALIDATION_ERROR", 400,
         )
 
-    approver_1, a1_problem = clean_text(body.get("approver_1"), "approver_1", 60)
-    approver_2, a2_problem = clean_text(body.get("approver_2"), "approver_2", 60)
-    problems = [p for p in (a1_problem, a2_problem) if p]
-    if problems:
-        return api_error(" ".join(problems), "VALIDATION_ERROR", 400, details=problems)
-    if approver_1.lower() == approver_2.lower():
-        return api_error(
-            "Two DIFFERENT approvers are required — approver_1 and approver_2 cannot be the same person.",
-            "APPROVERS_NOT_DISTINCT", 400,
-        )
-
     current_marks = ledger._as_int(effective.get("marks"))
     if current_marks == new_marks:
         return api_error(
@@ -542,14 +759,12 @@ def create_correction():
         "target_id": ledger._as_int(publisher.get("id")),
         "supersedes_id": ledger._as_int(effective.get("id")),
         "reason": reason,
-        "approver_1": approver_1,
-        "approver_2": approver_2,
+        "approver_1": approver_1["name"],
+        "approver_2": approver_2["name"],
         "created_at": ledger.utc_now_iso(),
     }
-    entry = ledger.prepare_entry(entry, db.fetch_tip_hash())
-
     try:
-        entry_id = db.insert_entry(entry)
+        entry_id = db.append_entry(entry)
     except sqlite3.IntegrityError as exc:
         return api_error(f"The ledger rejected this correction ({exc}).", "INSERT_FAILED", 409)
 

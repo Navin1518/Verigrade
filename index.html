@@ -124,6 +124,40 @@
     </div>
   </section>
 
+  <div class="auth-overlay" id="authOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <div class="auth-card">
+      <button class="auth-close" id="authCloseBtn" type="button" aria-label="Close login"><i data-lucide="x"></i></button>
+      <div class="auth-brand">
+        <span class="landing-brand-mark"><i data-lucide="shield-check"></i></span>
+        <span><strong>VERIGRADE</strong><small>SECURE ACCOUNT ACCESS</small></span>
+      </div>
+      <div class="auth-tabs" role="tablist">
+        <button class="auth-tab active" id="loginTab" type="button" data-auth-mode="login" role="tab">Log in</button>
+        <button class="auth-tab" id="signupTab" type="button" data-auth-mode="signup" role="tab">Sign up</button>
+      </div>
+      <form id="authForm" class="auth-form" novalidate>
+        <div class="auth-name-field" id="authNameField" hidden>
+          <label for="authName">Full name</label>
+          <input id="authName" name="name" type="text" autocomplete="name" maxlength="80" placeholder="Your full name">
+        </div>
+        <div>
+          <label for="authEmail">Email address</label>
+          <input id="authEmail" name="email" type="email" autocomplete="email" maxlength="120" placeholder="you@institution.edu" required>
+        </div>
+        <div>
+          <label for="authPassword">Password</label>
+          <div class="auth-password-wrap">
+            <input id="authPassword" name="password" type="password" autocomplete="current-password" minlength="8" placeholder="Minimum 8 characters" required>
+            <button class="auth-eye" id="authPasswordToggle" type="button" aria-label="Show password"><i data-lucide="eye"></i></button>
+          </div>
+        </div>
+        <p class="auth-error" id="authError" role="alert" hidden></p>
+        <button class="btn primary auth-submit" id="authSubmit" type="submit">Continue <i data-lucide="arrow-right"></i></button>
+      </form>
+      <p class="auth-footnote"><i data-lucide="lock-keyhole"></i> Credentials are protected with server-side password hashing.</p>
+    </div>
+  </div>
+
   <div class="app-shell" id="appShell" hidden>
   <!-- ===== SIDEBAR ===== -->
   <aside class="sidebar" id="sidebar">

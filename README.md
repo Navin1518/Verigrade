@@ -25,7 +25,7 @@ Exam marksheets can be forged or silently edited after publication. Institutions
 - Dark graphite and neon-lime theme with adjustable green accents
 - Responsive layout, keyboard-friendly controls and accessible text status labels
 
-> **Security limitation:** SHA-256 detects ledger edits that do not rebuild the chain, but this demo does not yet provide user authentication or trusted signing keys. Use it as a tamper-evident record demonstration, not as an authoritative academic credential service.
+> **Security model:** The backend requires API credentials for publish and correction mutations. Use separate publisher and two approver credentials with restricted roles. Never commit secrets to the repository.
 
 ## Technology Stack
 HTML5 · CSS3 · Vanilla JavaScript · Web Crypto API · Lucide icons (pinned CDN) · QRCode.js (pinned CDN) · Inter font (Google Fonts CDN)
@@ -85,6 +85,14 @@ The app is available at `http://127.0.0.1:5000`.
 3. Railway will use `railway.json` and start the Flask app with Gunicorn.
 4. Open **Settings -> Networking -> Generate Domain**.
 5. The generated URL is the public backend URL.
+
+Configure these Railway environment variables:
+
+- `VERIGRADE_API_KEYS`: JSON object mapping API keys to principals, for example
+  `{"publisher-key":{"name":"Registrar","roles":["publisher"]},"approver-one-key":{"name":"Approver One","roles":["approver"]},"approver-two-key":{"name":"Approver Two","roles":["approver"]}}`
+- `VERIGRADE_CORS_ORIGINS`: comma-separated allowed frontend origins. Leave unset only for same-origin/API tooling scenarios.
+- `VERIGRADE_SESSION_SECRET`: a long random secret used to sign login sessions.
+- `VERIGRADE_COOKIE_SECURE`: set to `1` in HTTPS production deployments.
 
 ## Screenshots
 _Add screenshots here._

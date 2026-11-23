@@ -28,6 +28,31 @@
   let storageWritable = true;
   let storageIssue = "";
   let storageCanReset = false;
+  let authMode = "login";
+  let currentUser = null;
+
+  function getPublishApiKey() {
+    let key = sessionStorage.getItem("verigrade.publishApiKey");
+    if (!key) {
+      key = window.prompt("Enter the authorized publisher API key:");
+      if (key) sessionStorage.setItem("verigrade.publishApiKey", key);
+    }
+    return key;
+  }
+
+  function getApproverApiKeys() {
+    let first = sessionStorage.getItem("verigrade.approverOneApiKey");
+    let second = sessionStorage.getItem("verigrade.approverTwoApiKey");
+    if (!first) {
+      first = window.prompt("Enter the first approver API key:");
+      if (first) sessionStorage.setItem("verigrade.approverOneApiKey", first);
+    }
+    if (!second) {
+      second = window.prompt("Enter the second approver API key:");
+      if (second) sessionStorage.setItem("verigrade.approverTwoApiKey", second);
+    }
+    return { first: first, second: second };
+  }
   let integrityReport = { valid: true, entries: [], firstIssue: null };
   let currentPage = 1;
   let pendingAction = null;
@@ -287,9 +312,51 @@
     window.scrollTo(0, 0);
   }
 
-  function enterApp() {
+  async function checkAuth() {
+    try {
+      const response = await fetch(API_BASE + "/api/auth/me", { credentials: "include" });
+      if (!response.ok) return null;
+      const result = await response.json();
+      return result.user || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function openAuth(mode) {
+    setAuthMode(mode || "login");
+    $("authOverlay").hidden = false;
+    $("authEmail").focus();
+  }
+
+  function closeAuth() {
+    $("authOverlay").hidden = true;
+    $("authError").hidden = true;
+  }
+
+  function setAuthMode(mode) {
+    authMode = mode;
+    document.querySelectorAll("[data-auth-mode]").forEach(function (tab) {
+      tab.classList.toggle("active", tab.dataset.authMode === mode);
+    });
+    $("authNameField").hidden = mode !== "signup";
+    $("authName").required = mode === "signup";
+    $("authPassword").autocomplete = mode === "signup" ? "new-password" : "current-password";
+    $("authSubmit").innerHTML = (mode === "signup" ? "Create account" : "Log in") +
+      ' <i data-lucide="arrow-right"></i>';
+    if (window.lucide) window.lucide.createIcons();
+  }
+
+  async function enterApp() {
+    currentUser = await checkAuth();
+    if (!currentUser) {
+      openAuth("login");
+      return;
+    }
     $("landingPage").hidden = true;
     $("appShell").hidden = false;
+    $("brandAdmin").textContent = currentUser.name;
+    $("brandRole").textContent = currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1);
     showView("overview");
   }
 
@@ -796,7 +863,11 @@
       if (duplicate) throw new Error(duplicate);
       const response = await fetch(API_BASE + "/api/publish", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + getPublishApiKey()
+        },
         body: JSON.stringify({
           roll_no: rollNo,
           student_name: name,
@@ -903,6 +974,7 @@
       if (serverPayload) {
         const response = await fetch(API_BASE + "/api/verify", {
           method: "POST",
+          credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(serverPayload)
         });
@@ -1113,9 +1185,15 @@
       toast("First approval recorded. A second approval is required.", "ok");
       return;
     }
+    const approverKeys = getApproverApiKeys();
     const correctionResponse = await fetch(API_BASE + "/api/corrections", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + approverKeys.first,
+        "X-Verigrade-Approver-2": approverKeys.second
+      },
       body: JSON.stringify({
         target_id: correction.recordId,
         new_marks: correction.requested,
@@ -1189,7 +1267,7 @@
 
   async function syncServerLedger() {
     try {
-      const response = await fetch(API_BASE + "/api/records", { cache: "no-store" });
+      const response = await fetch(API_BASE + "/api/records", { cache: "no-store", credentials: "include" });
       if (!response.ok) return false;
       const result = await response.json();
       if (!result.ok || !Array.isArray(result.records)) return false;
@@ -1318,6 +1396,51 @@
     $("landingOpenBtn").addEventListener("click", enterApp);
     $("getStartedBtn").addEventListener("click", enterApp);
     $("landingFinalBtn").addEventListener("click", enterApp);
+    $("authCloseBtn").addEventListener("click", closeAuth);
+    document.querySelectorAll("[data-auth-mode]").forEach(function (tab) {
+      tab.addEventListener("click", function () { setAuthMode(tab.dataset.authMode); });
+    });
+    $("authPasswordToggle").addEventListener("click", function () {
+      const input = $("authPassword");
+      input.type = input.type === "password" ? "text" : "password";
+      $("authPasswordToggle").setAttribute("aria-label", input.type === "password" ? "Show password" : "Hide password");
+    });
+    $("authForm").addEventListener("submit", async function (event) {
+      event.preventDefault();
+      const submit = $("authSubmit");
+      const errorBox = $("authError");
+      submit.disabled = true;
+      errorBox.hidden = true;
+      try {
+        const payload = {
+          email: $("authEmail").value.trim(),
+          password: $("authPassword").value
+        };
+        if (authMode === "signup") payload.name = $("authName").value.trim();
+        const endpoint = authMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+        const response = await fetch(API_BASE + endpoint, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.error || "Authentication failed.");
+        currentUser = result.user;
+        closeAuth();
+        $("landingPage").hidden = true;
+        $("appShell").hidden = false;
+        $("brandAdmin").textContent = currentUser.name;
+        $("brandRole").textContent = currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1);
+        showView("overview");
+        toast(authMode === "signup" ? "Account created." : "Welcome back.", "ok");
+      } catch (error) {
+        errorBox.textContent = error.message;
+        errorBox.hidden = false;
+      } finally {
+        submit.disabled = false;
+      }
+    });
     $("landingReturnBtn").addEventListener("click", returnToLanding);
     $("nav").addEventListener("click", function (event) {
       const button = event.target.closest("[data-view]");

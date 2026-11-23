@@ -2,7 +2,7 @@
 
 > *Trust Every Result. Verify Every Record.*
 
-A frontend-only exam-result ledger built with HTML5, CSS3 and Vanilla JavaScript.
+A web-based exam-result ledger with an HTML5, CSS3 and Vanilla JavaScript frontend and a Flask backend.
 
 ## Problem Statement
 Exam marksheets can be forged or silently edited after publication. Institutions and employers need a clear way to see whether a result is original, pending, or tampered.
@@ -19,13 +19,13 @@ Exam marksheets can be forged or silently edited after publication. Institutions
 - Results ledger with search, integrity filters, pagination, record export and QR display
 - Publish any student result with SHA-256 Web Crypto hashing and a chained `prevHash`
 - Verify records by ID, SHA-256 hash or QR JSON payload
-- Corrections & Approvals with persisted requests and chain re-hashing after approval
+- Correction requests with session-backed two-approver decisions pending
 - Audit logs with search and status filter
 - Settings and ledger records persisted in browser `localStorage`
 - Dark graphite and neon-lime theme with adjustable green accents
 - Responsive layout, keyboard-friendly controls and accessible text status labels
 
-> **Security model:** The backend requires API credentials for publish and correction mutations. Use separate publisher and two approver credentials with restricted roles. Never commit secrets to the repository.
+> **Security model:** Login uses signed server sessions. New accounts have the `viewer` role; publishing requires the `publisher` or `admin` role. The frontend correction decisions are paused until the authenticated two-approver flow is available; the backend correction API still accepts separate API-key approvers. Never expose API keys in the browser or commit secrets to the repository.
 
 ## Technology Stack
 HTML5 · CSS3 · Vanilla JavaScript · Web Crypto API · Lucide icons (pinned CDN) · QRCode.js (pinned CDN) · Inter font (Google Fonts CDN)
@@ -58,6 +58,8 @@ The ledger starts empty. Add a student or publish a result to create records. A 
 
 Records, correction requests, audit entries, and settings are saved per browser profile. A QR payload identifies a record but does not contain a server-verifiable signature; another browser can verify it only if it has the same local ledger data.
 
+The login and signup flows use the Flask backend. New accounts default to viewer access; an administrator must assign publishing or approval roles through a trusted process. Correction approval and rejection controls remain disabled until both approvers can be authenticated by the session-based frontend.
+
 Run the ledger tests with `node --test tests/ledger.test.js`.
 
 ## Deployment
@@ -88,11 +90,10 @@ The app is available at `http://127.0.0.1:5000`.
 
 Configure these Railway environment variables:
 
-- `VERIGRADE_API_KEYS`: JSON object mapping API keys to principals, for example
-  `{"publisher-key":{"name":"Registrar","roles":["publisher"]},"approver-one-key":{"name":"Approver One","roles":["approver"]},"approver-two-key":{"name":"Approver Two","roles":["approver"]}}`
 - `VERIGRADE_CORS_ORIGINS`: comma-separated allowed frontend origins. Leave unset only for same-origin/API tooling scenarios.
 - `VERIGRADE_SESSION_SECRET`: a long random secret used to sign login sessions.
 - `VERIGRADE_COOKIE_SECURE`: set to `1` in HTTPS production deployments.
+- `VERIGRADE_API_KEYS`: backend-only credentials with publisher/approver roles for direct API integrations. The frontend no longer collects or sends these keys.
 
 ## Screenshots
 _Add screenshots here._

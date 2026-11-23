@@ -31,27 +31,10 @@
   let authMode = "login";
   let currentUser = null;
 
-  function getPublishApiKey() {
-    let key = sessionStorage.getItem("verigrade.publishApiKey");
-    if (!key) {
-      key = window.prompt("Enter the authorized publisher API key:");
-      if (key) sessionStorage.setItem("verigrade.publishApiKey", key);
-    }
-    return key;
-  }
-
-  function getApproverApiKeys() {
-    let first = sessionStorage.getItem("verigrade.approverOneApiKey");
-    let second = sessionStorage.getItem("verigrade.approverTwoApiKey");
-    if (!first) {
-      first = window.prompt("Enter the first approver API key:");
-      if (first) sessionStorage.setItem("verigrade.approverOneApiKey", first);
-    }
-    if (!second) {
-      second = window.prompt("Enter the second approver API key:");
-      if (second) sessionStorage.setItem("verigrade.approverTwoApiKey", second);
-    }
-    return { first: first, second: second };
+  function clearLegacyApiKeys() {
+    sessionStorage.removeItem("verigrade.publishApiKey");
+    sessionStorage.removeItem("verigrade.approverOneApiKey");
+    sessionStorage.removeItem("verigrade.approverTwoApiKey");
   }
   let integrityReport = { valid: true, entries: [], firstIssue: null };
   let currentPage = 1;
@@ -299,6 +282,11 @@
 
   // Keep the active view and sidebar state in sync for mouse and keyboard navigation.
   function showView(viewId) {
+    if (viewId === "publish" && currentUser &&
+        currentUser.role !== "publisher" && currentUser.role !== "admin") {
+      toast("Your account has viewer access. A publisher role is required to publish results.", "warn");
+      viewId = "overview";
+    }
     document.querySelectorAll(".view").forEach(function (view) {
       view.classList.toggle("active", view.id === viewId);
     });
@@ -353,11 +341,45 @@
       openAuth("login");
       return;
     }
+    showSignedInApp(currentUser);
+  }
+
+  function showSignedInApp(user) {
+    currentUser = user;
     $("landingPage").hidden = true;
     $("appShell").hidden = false;
-    $("brandAdmin").textContent = currentUser.name;
-    $("brandRole").textContent = currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1);
+    $("brandAdmin").textContent = user.name;
+    $("brandRole").textContent = user.role.charAt(0).toUpperCase() + user.role.slice(1);
+    $("brandAvatar").textContent = user.name.split(/\s+/).map(function (part) {
+      return part.charAt(0);
+    }).join("").slice(0, 2).toUpperCase();
     showView("overview");
+  }
+
+  async function signOut() {
+    const button = $("logoutBtn");
+    button.disabled = true;
+    try {
+      const response = await fetch(API_BASE + "/api/auth/logout", {
+        method: "POST",
+        credentials: "include"
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || "Could not sign out.");
+      }
+      currentUser = null;
+      clearLegacyApiKeys();
+      $("authForm").reset();
+      $("appShell").hidden = true;
+      $("landingPage").hidden = false;
+      window.scrollTo(0, 0);
+      toast("You have been signed out.", "ok");
+    } catch (error) {
+      toast("Sign out failed: " + error.message, "bad");
+    } finally {
+      button.disabled = false;
+    }
   }
 
   function returnToLanding() {
@@ -864,10 +886,7 @@
       const response = await fetch(API_BASE + "/api/publish", {
         method: "POST",
         credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer " + getPublishApiKey()
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           roll_no: rollNo,
           student_name: name,
@@ -1026,9 +1045,11 @@
         '</div><div><small>First approver</small>' + badge(item.first) +
         '</div><div><small>Second approver</small>' + badge(item.second) +
         '</div><div><small>Approval date</small>' + esc(safeText(item.date)) + "</div></div>" +
-        '<p class="muted">Reason: ' + esc(safeText(item.reason)) + '</p><br><div class="actions">' +
-        '<button class="btn sm primary" data-approve="' + esc(item.id) + '"' + (open ? "" : " disabled") + '>Approve</button>' +
-        '<button class="btn sm danger" data-reject="' + esc(item.id) + '"' + (open ? "" : " disabled") + '>Reject</button>' +
+        '<p class="muted">Reason: ' + esc(safeText(item.reason)) + '</p>' +
+        (open ? '<p class="notice">Approval and rejection are paused until server-backed two-approver authentication is available.</p>' : "") +
+        '<div class="actions">' +
+        '<button class="btn sm primary" disabled title="Server-backed two-approver flow is not available yet">Approve</button>' +
+        '<button class="btn sm danger" disabled title="Server-backed two-approver flow is not available yet">Reject</button>' +
         '<button class="btn sm" data-request="' + esc(item.id) + '">View request</button></div></div>';
     }).join("") : '<div class="card empty"><p>No correction requests. Request one from a verified result record.</p></div>';
   }
@@ -1120,103 +1141,6 @@
       $("cErr").textContent = error.message;
       return false;
     }
-  }
-
-  function confirmDecision(id, approving) {
-    const correction = findCorrection(id);
-    if (!correction || correction.status !== "Pending") {
-      toast("This correction request is no longer pending.", "warn");
-      return;
-    }
-    openModal(approving ? "Confirm approval" : "Confirm rejection",
-      "<p>" + (approving ? "Approve" : "Reject") + " the change from <strong>" +
-      esc(correction.original) + "</strong> to <strong>" + esc(correction.requested) +
-      "</strong> for " + esc(studentName(correction.rollNo)) + "?</p>" +
-      '<p class="notice">This browser-only prototype does not authenticate separate approvers.</p>', [
-        { label: "Cancel" },
-        {
-          label: approving ? "Approve" : "Reject",
-          cls: approving ? "primary" : "danger",
-          onClick: function () { return applyDecision(id, approving); }
-        }
-      ]);
-  }
-
-  async function rehashChainWithCorrection(recordId, newMarks) {
-    // Approved corrections rebuild every descendant hash so links stay consistent.
-    const currentReport = await Ledger.verifyChain(state.records);
-    if (!currentReport.valid) throw new Error("Cannot approve a correction while the ledger has an integrity issue.");
-    let previousHash = Ledger.GENESIS_HASH;
-    const rebuilt = [];
-    for (const current of state.records) {
-      const fields = Object.assign({}, current);
-      delete fields.hash;
-      delete fields.prevHash;
-      if (current.id === recordId) fields.marks = newMarks;
-      const record = await Ledger.createRecord(fields, previousHash);
-      rebuilt.push(record);
-      previousHash = record.hash;
-    }
-    return rebuilt;
-  }
-
-  async function applyDecision(id, approving) {
-    const correction = findCorrection(id);
-    if (!correction || correction.status !== "Pending") throw new Error("This correction request is no longer pending.");
-    if (!approving) {
-      commitState(function (draft) {
-        const item = draft.corrections.find(function (entry) { return entry.id === id; });
-        item.status = "Rejected";
-        if (item.first === "Pending") item.first = "Rejected";
-        else item.second = "Rejected";
-        appendAudit(draft, "Correction rejected", item.recordId, "Warning");
-      });
-      renderAll();
-      toast(id + " was rejected.", "warn");
-      return;
-    }
-    if (correction.first === "Pending") {
-      commitState(function (draft) {
-        const item = draft.corrections.find(function (entry) { return entry.id === id; });
-        item.first = "Approved";
-        appendAudit(draft, "First correction approval recorded", item.recordId, "Success");
-      });
-      renderAll();
-      toast("First approval recorded. A second approval is required.", "ok");
-      return;
-    }
-    const approverKeys = getApproverApiKeys();
-    const correctionResponse = await fetch(API_BASE + "/api/corrections", {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + approverKeys.first,
-        "X-Verigrade-Approver-2": approverKeys.second
-      },
-      body: JSON.stringify({
-        target_id: correction.recordId,
-        new_marks: correction.requested,
-        reason: correction.reason.length >= 10 ? correction.reason : "Correction approved after two-administrator review.",
-        approver_1: "Administrator One",
-        approver_2: "Administrator Two"
-      })
-    });
-    const correctionResult = await correctionResponse.json();
-    if (!correctionResponse.ok || !correctionResult.ok) {
-      throw new Error(correctionResult.error || "The server could not append the correction.");
-    }
-    const updatedRecords = await rehashChainWithCorrection(correction.recordId, correction.requested);
-    commitState(function (draft) {
-      const item = draft.corrections.find(function (entry) { return entry.id === id; });
-      item.second = "Approved";
-      item.status = "Approved";
-      item.date = new Date().toISOString();
-      draft.records = updatedRecords;
-      appendAudit(draft, "Correction approved and chain rebuilt", item.recordId, "Success");
-    });
-    await renderAll();
-    toast(id + " was approved; the affected chain was rehashed.", "ok");
   }
 
   function renderAudit() {
@@ -1396,6 +1320,7 @@
     $("landingOpenBtn").addEventListener("click", enterApp);
     $("getStartedBtn").addEventListener("click", enterApp);
     $("landingFinalBtn").addEventListener("click", enterApp);
+    $("logoutBtn").addEventListener("click", signOut);
     $("authCloseBtn").addEventListener("click", closeAuth);
     document.querySelectorAll("[data-auth-mode]").forEach(function (tab) {
       tab.addEventListener("click", function () { setAuthMode(tab.dataset.authMode); });
@@ -1426,13 +1351,9 @@
         });
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error(result.error || "Authentication failed.");
-        currentUser = result.user;
         closeAuth();
-        $("landingPage").hidden = true;
-        $("appShell").hidden = false;
-        $("brandAdmin").textContent = currentUser.name;
-        $("brandRole").textContent = currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1);
-        showView("overview");
+        $("authForm").reset();
+        showSignedInApp(result.user);
         toast(authMode === "signup" ? "Account created." : "Welcome back.", "ok");
       } catch (error) {
         errorBox.textContent = error.message;
@@ -1447,15 +1368,13 @@
       if (button) showView(button.dataset.view);
     });
     document.addEventListener("click", function (event) {
-      const target = event.target.closest("[data-go],[data-student],[data-view-result],[data-download],[data-qr],[data-approve],[data-reject],[data-request]");
+      const target = event.target.closest("[data-go],[data-student],[data-view-result],[data-download],[data-qr],[data-request]");
       if (!target) return;
       if (target.dataset.go) showView(target.dataset.go);
       else if (target.dataset.student) showStudent(target.dataset.student);
       else if (target.dataset.viewResult) viewResult(target.dataset.viewResult);
       else if (target.dataset.download) downloadRecord(target.dataset.download);
       else if (target.dataset.qr) showQrForRecord(target.dataset.qr);
-      else if (target.dataset.approve) confirmDecision(target.dataset.approve, true);
-      else if (target.dataset.reject) confirmDecision(target.dataset.reject, false);
       else if (target.dataset.request) viewRequest(target.dataset.request);
     });
     $("menuBtn").addEventListener("click", openMenu);
@@ -1501,6 +1420,7 @@
     });
   }
 
+  clearLegacyApiKeys();
   loadStoredState();
   setupEvents();
   loadSettingsForm();

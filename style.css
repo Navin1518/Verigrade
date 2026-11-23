@@ -169,6 +169,10 @@ nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
 .nav-item:hover { transform: translateX(2px); color: var(--text); background: var(--card-hover); }
 .nav-item.active { color: #14190A; font-weight: 700; background: var(--accent); border-color: var(--accent); box-shadow: 0 0 18px var(--accent-glow); animation: nav-glow 3.2s ease-in-out infinite; }
 .admin-card { display: flex; gap: 10px; align-items: center; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.admin-card > div:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; }
+.admin-card > div:nth-child(2) strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.logout-btn { width: 34px; height: 34px; flex: 0 0 34px; }
+.logout-btn svg { width: 16px; }
 .avatar { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: linear-gradient(135deg, var(--accent), var(--accent-secondary)); color: #14190A; font-weight: 700; }
 .backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 20; }
 
